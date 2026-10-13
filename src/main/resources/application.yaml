@@ -1,0 +1,18 @@
+spring:
+  application:
+    name: batch
+  config:
+    import: optional:file:.env[.properties]
+  datasource:
+    url: ${NEON_DB_URL}
+    username: ${NEON_DB_USERNAME}
+    password: ${NEON_DB_PASSWORD}
+    hikari:
+      maximum-pool-size: 5
+  batch:
+    jdbc:
+      initialize-schema: always
+
+hira:
+  base-url: ${HIRA_BASE_URL:https://apis.data.go.kr/B551182}
+  service-key: ${HIRA_SERVICE_KEY}
