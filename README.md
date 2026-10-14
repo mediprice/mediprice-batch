@@ -104,7 +104,7 @@ HIRA_SERVICE_KEY=<공공데이터포털 일반 인증키 (Decoding)>
 
 ```
 db/
-└── schema.sql                  테이블 8개 생성 SQL (컬럼별 설명 주석 포함)
+└── mediprice.sql                  테이블 8개 생성 SQL (컬럼별 설명 주석 포함)
 src/main/java/com/mediprice/batch/
 ├── BatchApplication.java       시작점. 배치 결과를 종료 코드로 반환
 ├── HiraBatchRunner.java        실행기. requestedAt 파라미터, --restart, --job= 처리
