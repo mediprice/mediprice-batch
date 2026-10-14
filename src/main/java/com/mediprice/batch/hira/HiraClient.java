@@ -34,7 +34,7 @@ public class HiraClient {
 
     private static final int MAX_ATTEMPTS = 3;
     // 다시 시도해 볼 만한 HIRA 오류 코드 (서버 일시 오류, XML이 아닌 응답). 22(호출 한도 초과)·30(키 오류)은 바로 실패
-    private static final Set<String> RETRYABLE_CODES = Set.of("01", "02", "04", "05", "PARSE");
+    private static final Set<String> RETRYABLE_CODES = Set.of("01", "02", "04", "05", "PARSE", "EMPTY");
 
     private final RestClient restClient;
     private final HiraProperties props;
@@ -91,7 +91,18 @@ public class HiraClient {
                     params.forEach(uriBuilder::queryParam);
                     return uriBuilder.build();
                 })
-                .exchange((request, response) -> response.getBody().readAllBytes());
+                .exchange((request, response) -> {
+                    byte[] body = response.getBody().readAllBytes();
+                    // 본문 없는 응답 (예: 포털이 302로 다른 주소로 넘김). 원인 확인용으로 상태 코드를 남김
+                    if (body.length == 0) {
+                        // Location에 인증키가 들어 있어서 로그에 안 남게 가림
+                        String location = String.valueOf(response.getHeaders().getFirst("Location"))
+                                .replace(props.serviceKey(), "<KEY>");
+                        throw new HiraApiException("EMPTY", "빈 응답 HTTP " + response.getStatusCode().value()
+                                + " Location=" + location);
+                    }
+                    return body;
+                });
     }
 
     private HiraPage parse(byte[] body) {
