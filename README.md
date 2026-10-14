@@ -28,7 +28,7 @@ MediPrice 서비스(비급여 진료비 비교)의 병원·비급여 항목·가
 
 - Java 21 (`JAVA_HOME`이 21을 가리켜야 함. Gradle 9는 Java 17 이상 필요)
 - 공공데이터포털 인증키: 병원정보서비스, 비급여진료비정보조회서비스, 의료기관별상세정보서비스, 병원코드정보서비스 4개 활용신청
-- Neon DB에 테이블 생성: [`db/schema.sql`](db/schema.sql)을 Neon SQL Editor에 붙여넣고 **한 번만** 실행
+- Neon DB에 테이블 생성: [`db/mediprice.sql`](db/mediprice.sql)을 Neon SQL Editor에 붙여넣고 **한 번만** 실행
   - 테이블 8개와 PostGIS 확장을 만듭니다. 다시 실행하면 "이미 있음" 오류가 납니다
   - 확인 쿼리:
     ```sql
@@ -37,10 +37,12 @@ MediPrice 서비스(비급여 진료비 비교)의 병원·비급여 항목·가
     ORDER BY table_name;
     ```
     테이블 8개가 보이면 성공입니다 (PostGIS가 만드는 `spatial_ref_sys`도 함께 보임)
+    현재는 테이블이 생성된 상태 이므로 DB를 생성할 필요는 없습니다.
 
 ### 2. `.env` 파일 만들기
 
 프로젝트 폴더에 `.env` 파일을 만들고 아래 값을 넣습니다. `.env`는 `.gitignore`에 포함되어 있어 커밋되지 않습니다.
+`.env` 파일 제작 가이드라인
 
 ```
 NEON_DB_URL=jdbc:postgresql://<호스트>/neondb?sslmode=require
@@ -48,13 +50,6 @@ NEON_DB_USERNAME=neondb_owner
 NEON_DB_PASSWORD=<비밀번호>
 HIRA_SERVICE_KEY=<공공데이터포털 일반 인증키 (Decoding)>
 ```
-
-| 키 | 설명 |
-|---|---|
-| `NEON_DB_URL` | Neon Connect 창의 주소에서 `postgresql://` 앞에 `jdbc:`를 붙이고, `user:password@` 부분과 `channel_binding` 옵션은 뺀 값 |
-| `NEON_DB_USERNAME`, `NEON_DB_PASSWORD` | Neon 접속 계정 |
-| `HIRA_SERVICE_KEY` | 공공데이터포털 인증키. 4개 API가 같은 키를 씀 |
-| `HIRA_BASE_URL` (선택) | 테스트 서버를 쓸 때만. 기본값 `https://apis.data.go.kr/B551182` |
 
 ### 3. 실행
 
@@ -129,7 +124,7 @@ src/main/java/com/mediprice/batch/
 
 ## 테이블 구조
 
-자세한 컬럼 설명은 [`db/schema.sql`](db/schema.sql)의 주석에 있습니다.
+자세한 컬럼 설명은 [`db/mediprice.sql`](db/mediprice.sql)의 주석에 있습니다.
 
 | 테이블 | 키 | 비고 |
 |---|---|---|
