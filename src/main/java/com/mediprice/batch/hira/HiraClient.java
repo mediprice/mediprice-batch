@@ -2,16 +2,23 @@ package com.mediprice.batch.hira;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
@@ -23,25 +30,68 @@ import org.xml.sax.SAXException;
 @Component
 public class HiraClient {
 
+    private static final Logger log = LoggerFactory.getLogger(HiraClient.class);
+
+    private static final int MAX_ATTEMPTS = 3;
+    // 다시 시도해 볼 만한 HIRA 오류 코드 (서버 일시 오류, XML이 아닌 응답). 22(호출 한도 초과)·30(키 오류)은 바로 실패
+    private static final Set<String> RETRYABLE_CODES = Set.of("01", "02", "04", "05", "PARSE");
+
     private final RestClient restClient;
     private final HiraProperties props;
 
     public HiraClient(RestClient.Builder builder, HiraProperties props) {
-        this.restClient = builder.baseUrl(props.baseUrl()).build();
+        // 응답이 안 오면 무한정 기다리지 않도록 시간 제한 (가격 목록은 한 페이지에 수 초씩 걸림)
+        HttpClient httpClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(10))
+                .build();
+        JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(httpClient);
+        requestFactory.setReadTimeout(Duration.ofSeconds(90));
+
+        this.restClient = builder.baseUrl(props.baseUrl()).requestFactory(requestFactory).build();
         this.props = props;
     }
 
     // HIRA API 한 페이지 호출. path 예: "/codeInfoService/getAddrCodeList", serviceKey는 자동으로 붙음
+    // 네트워크 오류·시간 초과·HIRA 일시 오류면 최대 3번까지 다시 시도
     public HiraPage get(String path, Map<String, String> params) {
+        for (int attempt = 1; ; attempt++) {
+            try {
+                return parse(fetch(path, params));
+            } catch (ResourceAccessException | HiraApiException e) {
+                if (attempt >= MAX_ATTEMPTS || !isRetryable(e)) {
+                    throw e;
+                }
+                log.warn("HIRA 호출 실패, 다시 시도 {}/{}: {} {} - {}", attempt, MAX_ATTEMPTS - 1, path, params, e.getMessage());
+                sleep(Duration.ofSeconds(5L * attempt));
+            }
+        }
+    }
+
+    private boolean isRetryable(RuntimeException e) {
+        if (e instanceof HiraApiException hiraError) {
+            return RETRYABLE_CODES.contains(hiraError.getCode());
+        }
+        return true; // ResourceAccessException: 연결 실패, 시간 초과
+    }
+
+    private void sleep(Duration duration) {
+        try {
+            Thread.sleep(duration);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("다시 시도 대기 중 중단됨", e);
+        }
+    }
+
+    private byte[] fetch(String path, Map<String, String> params) {
         // retrieve()는 4xx면 예외부터 던져 오류 XML을 못 읽음 → exchange()로 본문 그대로 받음
-        byte[] body = restClient.get()
+        return restClient.get()
                 .uri(uriBuilder -> {
                     uriBuilder.path(path).queryParam("serviceKey", props.serviceKey());
                     params.forEach(uriBuilder::queryParam);
                     return uriBuilder.build();
                 })
                 .exchange((request, response) -> response.getBody().readAllBytes());
-        return parse(body);
     }
 
     private HiraPage parse(byte[] body) {
