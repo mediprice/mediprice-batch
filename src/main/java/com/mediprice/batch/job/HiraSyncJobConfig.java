@@ -5,6 +5,7 @@ import java.util.Map;
 
 import org.springframework.batch.core.job.Job;
 import org.springframework.batch.core.job.builder.JobBuilder;
+import org.springframework.batch.core.listener.ExecutionContextPromotionListener;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.core.step.Step;
 import org.springframework.batch.core.step.builder.StepBuilder;
@@ -26,6 +27,9 @@ public class HiraSyncJobConfig {
     private static final int PAGE_SIZE = 1000;
     // 병원 상세는 병원마다 1번씩 호출해서 100곳마다 저장
     private static final int DETAIL_CHUNK_SIZE = 100;
+    // 페이지로 읽는 테이블의 전체 건수 저장 키
+    private static final String HOSPITAL_TOTAL_KEY = StaleRowCleanupTasklet.totalCountKey("hospital");
+    private static final String PRICE_TOTAL_KEY = StaleRowCleanupTasklet.totalCountKey("hospital_npay_price");
 
     // 전체 동기화: 코드 → 항목 → 병원 → 가격 → 정리 → 가격 이력 → 병원 상세 → 상세 정리
     @Bean
@@ -120,8 +124,9 @@ public class HiraSyncJobConfig {
         return new StepBuilder("hospitalStep", jobRepository)
                 .<Map<String, String>, Map<String, String>>chunk(PAGE_SIZE)
                 .reader(new HiraPagingItemReader(hiraClient,
-                        "/hospInfoServicev2/getHospBasisList", Map.of(), PAGE_SIZE))
+                        "/hospInfoServicev2/getHospBasisList", Map.of(), PAGE_SIZE, HOSPITAL_TOTAL_KEY))
                 .writer(hospitalWriter)
+                .listener(promoteToJob(HOSPITAL_TOTAL_KEY))
                 .transactionManager(transactionManager)
                 .build();
     }
@@ -135,8 +140,9 @@ public class HiraSyncJobConfig {
         return new StepBuilder("npayPriceStep", jobRepository)
                 .<Map<String, String>, Map<String, String>>chunk(PAGE_SIZE)
                 .reader(new HiraPagingItemReader(hiraClient,
-                        "/nonPaymentDamtInfoService/getNonPaymentItemHospDtlList", Map.of(), PAGE_SIZE))
+                        "/nonPaymentDamtInfoService/getNonPaymentItemHospDtlList", Map.of(), PAGE_SIZE, PRICE_TOTAL_KEY))
                 .writer(npayPriceWriter)
+                .listener(promoteToJob(PRICE_TOTAL_KEY))
                 .transactionManager(transactionManager)
                 .build();
     }
@@ -150,7 +156,7 @@ public class HiraSyncJobConfig {
                 "hospital_npay_price", "hospital", "npay_item",
                 "region_sggu", "region_sido", "institution_class");
         return new StepBuilder("syncCleanupStep", jobRepository)
-                .tasklet(new StaleRowCleanupTasklet(jdbcTemplate, tables), transactionManager)
+                .tasklet(new StaleRowCleanupTasklet(jdbcTemplate, jobRepository, tables), transactionManager)
                 .build();
     }
 
@@ -186,7 +192,14 @@ public class HiraSyncJobConfig {
                                   PlatformTransactionManager transactionManager,
                                   NamedParameterJdbcTemplate jdbcTemplate) {
         return new StepBuilder("detailCleanupStep", jobRepository)
-                .tasklet(new StaleRowCleanupTasklet(jdbcTemplate, List.of("hospital_detail")), transactionManager)
+                .tasklet(new StaleRowCleanupTasklet(jdbcTemplate, jobRepository, List.of("hospital_detail")), transactionManager)
                 .build();
+    }
+
+    // Reader가 Step 실행 기록에 남긴 값을 Job 실행 기록으로 올림. 이어서 실행해 완료된 Step을 건너뛰어도 정리 Step이 읽을 수 있음
+    private ExecutionContextPromotionListener promoteToJob(String key) {
+        ExecutionContextPromotionListener listener = new ExecutionContextPromotionListener();
+        listener.setKeys(new String[] {key});
+        return listener;
     }
 }

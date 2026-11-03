@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
 import com.mediprice.batch.HiraBatchRunner;
 
 // 현재 가격(hospital_npay_price) 전체를 이번 달 기록으로 npay_price_history에 복사
-// 같은 달에 다시 돌면 그 달 기록을 지우고 새로 채움. 옛 가격은 정리 단계에서 먼저 지워져 있어야 함
+// 같은 달에 다시 돌면 그 달 기록을 지우고 새로 채움. HIRA에서 사라진 가격도 정리 단계에서 지워지기 전까지는 같이 복사됨
 @Component
 public class PriceHistoryTasklet implements Tasklet {
 
