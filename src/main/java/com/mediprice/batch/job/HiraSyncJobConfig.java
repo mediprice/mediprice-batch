@@ -155,8 +155,13 @@ public class HiraSyncJobConfig {
         List<String> tables = List.of(
                 "hospital_npay_price", "hospital", "npay_item",
                 "region_sggu", "region_sido", "institution_class");
+        // 다른 테이블이 참조 중인 행은 남김. 안 그러면 FK 오류로 Job이 실패하거나 CASCADE로 최신 가격까지 지워짐
+        Map<String, String> deleteGuards = Map.of(
+                "hospital", "NOT EXISTS (SELECT 1 FROM hospital_npay_price p WHERE p.ykiho = hospital.ykiho)",
+                "npay_item", "NOT EXISTS (SELECT 1 FROM hospital_npay_price p WHERE p.npay_cd = npay_item.npay_cd)",
+                "region_sido", "NOT EXISTS (SELECT 1 FROM region_sggu s WHERE s.sido_cd = region_sido.sido_cd)");
         return new StepBuilder("syncCleanupStep", jobRepository)
-                .tasklet(new StaleRowCleanupTasklet(jdbcTemplate, jobRepository, tables), transactionManager)
+                .tasklet(new StaleRowCleanupTasklet(jdbcTemplate, jobRepository, tables, deleteGuards), transactionManager)
                 .build();
     }
 
@@ -192,7 +197,7 @@ public class HiraSyncJobConfig {
                                   PlatformTransactionManager transactionManager,
                                   NamedParameterJdbcTemplate jdbcTemplate) {
         return new StepBuilder("detailCleanupStep", jobRepository)
-                .tasklet(new StaleRowCleanupTasklet(jdbcTemplate, jobRepository, List.of("hospital_detail")), transactionManager)
+                .tasklet(new StaleRowCleanupTasklet(jdbcTemplate, jobRepository, List.of("hospital_detail"), Map.of()), transactionManager)
                 .build();
     }
 
