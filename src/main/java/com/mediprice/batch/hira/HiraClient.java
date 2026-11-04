@@ -52,7 +52,7 @@ public class HiraClient {
     }
 
     // HIRA API 한 페이지 호출. path 예: "/codeInfoService/getAddrCodeList", serviceKey는 자동으로 붙음
-    // 네트워크 오류·시간 초과·HIRA 일시 오류면 최대 3번까지 다시 시도
+    // 네트워크 오류·시간 초과·HIRA 일시 오류면 최대 3번까지 호출
     public HiraPage get(String path, Map<String, String> params) {
         for (int attempt = 1; ; attempt++) {
             try {
@@ -74,7 +74,7 @@ public class HiraClient {
         return true; // ResourceAccessException: 연결 실패, 시간 초과
     }
 
-    private void sleep(Duration duration) {
+    void sleep(Duration duration) {
         try {
             Thread.sleep(duration);
         } catch (InterruptedException e) {
@@ -95,9 +95,9 @@ public class HiraClient {
                     byte[] body = response.getBody().readAllBytes();
                     // 본문 없는 응답 (예: 포털이 302로 다른 주소로 넘김). 원인 확인용으로 상태 코드를 남김
                     if (body.length == 0) {
-                        // Location에 인증키가 들어 있어서 로그에 안 남게 가림
+                        // Location 쿼리에 인증키가 들어 있어서 쿼리를 통째로 뺌 (인코딩되면 키 문자열로는 못 찾음)
                         String location = String.valueOf(response.getHeaders().getFirst("Location"))
-                                .replace(props.serviceKey(), "<KEY>");
+                                .replaceFirst("\\?.*", "");
                         throw new HiraApiException("EMPTY", "빈 응답 HTTP " + response.getStatusCode().value()
                                 + " Location=" + location);
                     }
@@ -113,7 +113,6 @@ public class HiraClient {
             throw new HiraApiException(text(root, "returnReasonCode"), text(root, "returnAuthMsg"));
         }
 
-        // 정상 구조인데 결과 코드가 00이 아님
         String resultCode = text(root, "resultCode");
         if (!"00".equals(resultCode)) {
             throw new HiraApiException(resultCode, text(root, "resultMsg"));
@@ -142,7 +141,6 @@ public class HiraClient {
         return map;
     }
 
-    // 태그를 찾아 글자를 꺼냄. 없으면 빈 문자열
     private String text(Element root, String tagName) {
         NodeList nodes = root.getElementsByTagName(tagName);
         return nodes.getLength() == 0 ? "" : nodes.item(0).getTextContent().trim();

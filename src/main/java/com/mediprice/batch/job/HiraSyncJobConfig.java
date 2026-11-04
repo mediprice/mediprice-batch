@@ -20,7 +20,6 @@ import com.mediprice.batch.hira.HiraPagingItemReader;
 // HIRA 동기화 Job·Step 등록
 // 실행 파라미터(requestedAt)는 HiraBatchRunner가 넣음. 실패하면 같은 파라미터로 다시 실행해 실패한 Step부터 이어감
 @Configuration
-
 public class HiraSyncJobConfig {
 
     // HIRA 한 페이지 건수 = DB에 한 번에 저장하는 건수 (HIRA 최대 1000)
@@ -71,7 +70,7 @@ public class HiraSyncJobConfig {
                 .build();
     }
 
-    // 병원 상세만 따로 돌리는 Job. 상세정보 API 하루 한도(1만 건) 때문에 하루 2번까지만 실행 가능
+    // 병원 상세만 따로 돌리는 Job
     @Bean
     public Job hospitalDetailJob(JobRepository jobRepository, Step hospitalDetailStep) {
         return new JobBuilder("hospitalDetailJob", jobRepository)
@@ -115,7 +114,6 @@ public class HiraSyncJobConfig {
                 .build();
     }
 
-    // 병원 약 8만 건: 1000건씩 읽고 → 1000건씩 저장을 반복
     @Bean
     public Step hospitalStep(JobRepository jobRepository,
                              PlatformTransactionManager transactionManager,
@@ -131,7 +129,7 @@ public class HiraSyncJobConfig {
                 .build();
     }
 
-    // 병원별 가격 약 28만 건: ykiho 없이 호출하면 전체 병원 가격이 옴. hospital, npay_item이 먼저 저장돼 있어야 함 (FK)
+    // 병원별 가격: ykiho 없이 호출하면 전체 병원 가격이 옴. hospital, npay_item이 먼저 저장돼 있어야 함 (FK)
     @Bean
     public Step npayPriceStep(JobRepository jobRepository,
                               PlatformTransactionManager transactionManager,
@@ -175,7 +173,7 @@ public class HiraSyncJobConfig {
                 .build();
     }
 
-    // 가격 데이터가 있는 병원(약 4천 곳)마다 세부정보 호출 → hospital_detail
+    // 가격 데이터가 있는 병원마다 세부정보 호출 → hospital_detail
     @Bean
     public Step hospitalDetailStep(JobRepository jobRepository,
                                    PlatformTransactionManager transactionManager,

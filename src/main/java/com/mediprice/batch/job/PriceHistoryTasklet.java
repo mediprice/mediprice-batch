@@ -1,7 +1,6 @@
 package com.mediprice.batch.job;
 
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 
 import org.springframework.batch.core.scope.context.ChunkContext;
 import org.springframework.batch.core.step.StepContribution;
@@ -38,9 +37,7 @@ public class PriceHistoryTasklet implements Tasklet {
     @Override
     public RepeatStatus execute(StepContribution contribution, ChunkContext chunkContext) {
         // 기준 월 = 실행 기준 시각(requestedAt)이 속한 달의 1일. 이어서 실행해도 같은 달로 기록됨
-        LocalDateTime requestedAt = chunkContext.getStepContext().getStepExecution()
-                .getJobParameters().getLocalDateTime(HiraBatchRunner.REQUESTED_AT);
-        LocalDate month = (requestedAt != null ? requestedAt.toLocalDate() : LocalDate.now()).withDayOfMonth(1);
+        LocalDate month = HiraBatchRunner.requestedAt(chunkContext).toLocalDate().withDayOfMonth(1);
 
         MapSqlParameterSource params = new MapSqlParameterSource().addValue("month", month);
 

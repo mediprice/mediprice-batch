@@ -2,6 +2,7 @@ package com.mediprice.batch.job;
 
 import java.util.List;
 
+import org.springframework.batch.core.configuration.annotation.StepScope;
 import org.springframework.batch.infrastructure.item.ExecutionContext;
 import org.springframework.batch.infrastructure.item.ItemStreamReader;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -10,6 +11,7 @@ import org.springframework.stereotype.Component;
 // 가격 데이터가 있는 병원의 ykiho를 하나씩 돌려주는 Reader. 다 읽으면 null
 // 목록은 Step 시작 때 DB에서 읽음 (가격 Step이 끝난 뒤의 최신 목록)
 @Component
+@StepScope
 public class PricedHospitalReader implements ItemStreamReader<String> {
 
     private static final String SQL = "SELECT DISTINCT ykiho FROM hospital_npay_price ORDER BY ykiho";

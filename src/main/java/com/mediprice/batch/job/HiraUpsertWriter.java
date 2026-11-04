@@ -19,8 +19,7 @@ public class HiraUpsertWriter implements ItemWriter<Map<String, String>> {
     private final String sql;
     private final List<String> fields;
 
-    // sql : :ykiho 같은 파라미터 이름이 HIRA 응답 필드 이름과 같아야 함. 원본은 :raw로 넘어감
-    // fields : SQL에 넘길 HIRA 응답 필드 이름 목록
+    // SQL의 :ykiho 같은 파라미터 이름이 HIRA 응답 필드 이름과 같아야 함. 원본은 :raw로 넘어감
     public HiraUpsertWriter(NamedParameterJdbcTemplate jdbcTemplate, JsonMapper jsonMapper,
                             String sql, List<String> fields) {
         this.jdbcTemplate = jdbcTemplate;

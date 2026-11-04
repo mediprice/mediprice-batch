@@ -114,7 +114,7 @@ public class HiraPagingItemReader implements ItemStreamReader<Map<String, String
         reset();
     }
 
-    // 전체 건수만큼 다 읽었는지 확인. 페이지가 비면 실패 처리
+    // 페이지가 비면 실패 처리
     private void checkAllRead() {
         if (totalCount >= 0 && readCount != totalCount) {
             throw new IllegalStateException(path + " 읽은 건수와 전체 건수가 다름: "

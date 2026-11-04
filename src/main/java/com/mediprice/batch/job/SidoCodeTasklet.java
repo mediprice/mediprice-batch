@@ -12,9 +12,8 @@ import org.springframework.stereotype.Component;
 import com.mediprice.batch.hira.HiraClient;
 import com.mediprice.batch.hira.HiraPage;
 
-// 시도 코드(16건) → region_sido 저장 (병원코드정보서비스 getAddrCodeList, addrTp=1)
+// 시도 코드 → region_sido 저장 (병원코드정보서비스 getAddrCodeList, addrTp=1)
 @Component
-
 public class SidoCodeTasklet implements Tasklet {
 
     private static final String UPSERT_SQL = """
@@ -38,7 +37,6 @@ public class SidoCodeTasklet implements Tasklet {
         HiraPage page = hiraClient.get("/codeInfoService/getAddrCodeList",
                 Map.of("addrTp", "1", "pageNo", "1", "numOfRows", "1000"));
 
-        // 전체 건수만큼 다 받았는지 확인 (덜 받았으면 저장 안 함)
         if (page.items().size() != page.totalCount()) {
             throw new IllegalStateException("시도 코드를 다 받지 못함: "
                     + page.items().size() + " / " + page.totalCount());

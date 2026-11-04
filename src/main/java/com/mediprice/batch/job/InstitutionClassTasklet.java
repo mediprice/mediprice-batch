@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
 import com.mediprice.batch.hira.HiraClient;
 import com.mediprice.batch.hira.HiraPage;
 
-// 종별 코드(19건) → institution_class 저장 (병원코드정보서비스 getMedicInsttClassesCodeList)
+// 종별 코드 → institution_class 저장 (병원코드정보서비스 getMedicInsttClassesCodeList)
 @Component
 public class InstitutionClassTasklet implements Tasklet {
 

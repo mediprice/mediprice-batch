@@ -111,6 +111,21 @@ class HiraPagingItemReaderTest {
         assertThat(context.getInt(KEY)).isEqualTo(TOTAL);
     }
 
+    @Test
+    void 페이지를_덜_읽고_저장하면_재시작_때_그_페이지부터_다시_읽음() {
+        HiraPagingItemReader reader = new HiraPagingItemReader(hira, "/test", Map.of(), PAGE_SIZE, KEY);
+        reader.open(context);
+        for (int i = 0; i < PAGE_SIZE + 3; i++) {
+            reader.read();
+        }
+        reader.update(context);
+
+        HiraPagingItemReader restarted = new HiraPagingItemReader(hira, "/test", Map.of(), PAGE_SIZE, KEY);
+        restarted.open(context);
+
+        assertThat(restarted.read().get("key")).isEqualTo("r" + PAGE_SIZE);
+    }
+
     // Step 순서대로 실행: open → 반복(chunk 읽기, 저장, update). crashAfterCommits번 저장 후 꺼진 것처럼 멈춤
     private void runStep(int crashAfterCommits) {
         HiraPagingItemReader reader = new HiraPagingItemReader(hira, "/test", Map.of(), PAGE_SIZE, KEY);
