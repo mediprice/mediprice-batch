@@ -4,6 +4,7 @@ import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.util.List;
+import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,11 +34,13 @@ public class StaleRowCleanupTasklet implements Tasklet {
     private final NamedParameterJdbcTemplate jdbcTemplate;
     private final JobRepository jobRepository;
     private final List<String> tables; // FK 순서대로 (참조하는 테이블 먼저)
+    private final Map<String, String> deleteGuards; // 테이블별 추가 삭제 조건. 참조 중인 행을 남길 때 씀
 
-    public StaleRowCleanupTasklet(NamedParameterJdbcTemplate jdbcTemplate, JobRepository jobRepository, List<String> tables) {
+    public StaleRowCleanupTasklet(NamedParameterJdbcTemplate jdbcTemplate, JobRepository jobRepository, List<String> tables, Map<String, String> deleteGuards) {
         this.jdbcTemplate = jdbcTemplate;
         this.jobRepository = jobRepository;
         this.tables = tables;
+        this.deleteGuards = deleteGuards;
     }
 
     // 페이지로 읽은 테이블의 전체 건수 저장 키. Job 실행 기록에 있는 테이블만 건수를 비교함
@@ -78,9 +81,15 @@ public class StaleRowCleanupTasklet implements Tasklet {
                 log.warn("{}: 직전 성공 실행이 없어 삭제를 건너뜀 (갱신된 행 {}건)", table, fresh);
                 continue;
             }
-            int deleted = jdbcTemplate.update("DELETE FROM " + table + " WHERE synced_at < :deleteCutoff", params);
+            int deleted = jdbcTemplate.update("DELETE FROM " + table + " WHERE synced_at < :deleteCutoff AND " + deleteGuards.getOrDefault(table, "TRUE"), params);
             log.info("{}: 오래된 행 {}건 삭제 (갱신된 행 {}건)", table, deleted, fresh);
             totalDeleted += deleted;
+            // 지우고도 남은 오래된 행 = 다른 테이블이 아직 참조 중 (HIRA 목록끼리 어긋남)
+            Integer kept = jdbcTemplate.queryForObject(
+                    "SELECT count(*) FROM " + table + " WHERE synced_at < :deleteCutoff", params, Integer.class);
+            if (kept != null && kept > 0) {
+                log.warn("{}: 다른 테이블이 참조 중이라 {}건을 남김", table, kept);
+            }
         }
 
         contribution.incrementWriteCount(totalDeleted);
