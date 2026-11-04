@@ -17,7 +17,7 @@ import com.mediprice.batch.hira.HiraPage;
 
 import tools.jackson.databind.json.JsonMapper;
 
-// 비급여 항목(943건) → npay_item 저장 (비급여 3번 getNonPaymentItemCodeList2)
+// 비급여 항목 → npay_item 저장 (비급여 3번 getNonPaymentItemCodeList2)
 @Component
 public class NpayItemTasklet implements Tasklet {
 
@@ -77,7 +77,7 @@ public class NpayItemTasklet implements Tasklet {
         HiraPage page = hiraClient.get("/nonPaymentDamtInfoService/getNonPaymentItemCodeList2",
                 Map.of("pageNo", "1", "numOfRows", "1000"));
 
-        // 1000건 한 페이지로 다 받았는지 확인. 항목이 1000개를 넘으면 페이지 나눠 받도록 바꿔야 함
+        // 항목이 1000개를 넘으면 페이지 나눠 받도록 바꿔야 함
         if (page.items().size() != page.totalCount()) {
             throw new IllegalStateException("비급여 항목을 다 받지 못함: "
                     + page.items().size() + " / " + page.totalCount());

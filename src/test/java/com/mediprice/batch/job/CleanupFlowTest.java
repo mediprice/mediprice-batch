@@ -358,6 +358,18 @@ class CleanupFlowTest {
         assertThat(count("SELECT count(*) FROM region_sggu WHERE sggu_cd = :v", "z")).isZero();
     }
 
+    @Test
+    void 이번_실행에서_갱신된_행이_0건인_테이블은_삭제를_건너뜀(CapturedOutput output) throws Exception {
+        assertThat(run(W1).getStatus()).isEqualTo(BatchStatus.COMPLETED);
+        jdbc.update("INSERT INTO institution_class VALUES (:v, :t)", new MapSqlParameterSource("v", "old")
+                .addValue("t", W1.minusWeeks(10).atZone(ZoneId.systemDefault()).toOffsetDateTime()));
+
+        assertThat(run(W1.plusWeeks(1)).getStatus()).isEqualTo(BatchStatus.COMPLETED);
+
+        assertThat(count("SELECT count(*) FROM institution_class WHERE cl_cd = :v", "old")).isEqualTo(1);
+        assertThat(output.getOut()).contains("institution_class: 이번 실행에서 갱신된 행이 없어 삭제를 건너뜀");
+    }
+
     static class FakeHira extends HiraClient {
         final Map<String, List<Map<String, String>>> rows = new HashMap<>();
         final Map<String, Runnable> before = new HashMap<>();

@@ -1,5 +1,6 @@
 package com.mediprice.batch;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.Set;
@@ -14,15 +15,13 @@ import org.springframework.batch.core.job.parameters.JobParameters;
 import org.springframework.batch.core.job.parameters.JobParametersBuilder;
 import org.springframework.batch.core.launch.JobOperator;
 import org.springframework.batch.core.repository.JobRepository;
+import org.springframework.batch.core.scope.context.ChunkContext;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.ExitCodeGenerator;
 import org.springframework.stereotype.Component;
 
 // 배치 실행기
-//   새로 실행        : bootRun
-//   실패한 곳부터 이어서: bootRun --args='--restart'
-//   다른 Job 실행     : bootRun --args='--job=hiraCodeJob'
 @Component
 public class HiraBatchRunner implements ApplicationRunner, ExitCodeGenerator {
 
@@ -36,9 +35,12 @@ public class HiraBatchRunner implements ApplicationRunner, ExitCodeGenerator {
     private static final Set<BatchStatus> STALE = Set.of(BatchStatus.STARTED, BatchStatus.STARTING,
             BatchStatus.STOPPING, BatchStatus.UNKNOWN);
 
+    // 커밋 한 번에 걸리는 시간보다 충분히 길게 잡음
+    private static final Duration DEAD_AFTER = Duration.ofMinutes(30);
+
     private final JobOperator jobOperator;
     private final JobRepository jobRepository;
-    private final Map<String, Job> jobs; // Job 빈 이름 → Job
+    private final Map<String, Job> jobs;
 
     private int exitCode = 0;
 
@@ -56,6 +58,13 @@ public class HiraBatchRunner implements ApplicationRunner, ExitCodeGenerator {
             throw new IllegalArgumentException("없는 Job: " + jobName + " (가능: " + jobs.keySet() + ")");
         }
 
+        // 같은 테이블을 동시에 갱신하지 않게 막음
+        if (jobRepository.findRunningJobExecutions(jobName).stream().anyMatch(this::isAlive)) {
+            log.warn("{} 다른 실행이 진행 중이라 시작하지 않음", jobName);
+            exitCode = 1;
+            return;
+        }
+
         JobParameters params = args.containsOption("restart")
                 ? lastFailedParameters(jobName)
                 : new JobParametersBuilder().addLocalDateTime(REQUESTED_AT, LocalDateTime.now()).toJobParameters();
@@ -68,6 +77,26 @@ public class HiraBatchRunner implements ApplicationRunner, ExitCodeGenerator {
         if (execution.getStatus() != BatchStatus.COMPLETED) {
             exitCode = 1;
         }
+    }
+
+    public static LocalDateTime requestedAt(ChunkContext chunkContext) {
+        LocalDateTime requestedAt = chunkContext.getStepContext().getStepExecution()
+                .getJobParameters().getLocalDateTime(REQUESTED_AT);
+        if (requestedAt == null) {
+            throw new IllegalStateException("실행 파라미터 requestedAt이 없음 (HiraBatchRunner로 실행해야 함)");
+        }
+        return requestedAt;
+    }
+
+    // "실행 중" 상태만으로는 꺼진 실행과 구분이 안 돼서 마지막 기록 시각으로 판단
+    private boolean isAlive(JobExecution execution) {
+        LocalDateTime limit = LocalDateTime.now().minus(DEAD_AFTER);
+        return isAfter(execution.getLastUpdated(), limit)
+                || execution.getStepExecutions().stream().anyMatch(step -> isAfter(step.getLastUpdated(), limit));
+    }
+
+    private boolean isAfter(LocalDateTime time, LocalDateTime limit) {
+        return time != null && time.isAfter(limit);
     }
 
     // 마지막 실행이 실패했으면 그 파라미터를 돌려줌. "실행 중"으로 남아 있으면 실패로 정리한 뒤 돌려줌

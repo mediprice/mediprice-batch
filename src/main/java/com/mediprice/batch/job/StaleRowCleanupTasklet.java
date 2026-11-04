@@ -50,11 +50,7 @@ public class StaleRowCleanupTasklet implements Tasklet {
 
     @Override
     public RepeatStatus execute(StepContribution contribution, ChunkContext chunkContext) {
-        LocalDateTime requestedAt = chunkContext.getStepContext().getStepExecution()
-                .getJobParameters().getLocalDateTime(HiraBatchRunner.REQUESTED_AT);
-        if (requestedAt == null) {
-            throw new IllegalStateException("실행 파라미터 requestedAt이 없음 (HiraBatchRunner로 실행해야 함)");
-        }
+        LocalDateTime requestedAt = HiraBatchRunner.requestedAt(chunkContext);
         OffsetDateTime cutoff = requestedAt.atZone(ZoneId.systemDefault()).toOffsetDateTime()
                 .minusHours(CLOCK_MARGIN_HOURS);
         MapSqlParameterSource params = new MapSqlParameterSource("cutoff", cutoff);

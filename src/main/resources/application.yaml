@@ -13,7 +13,7 @@ spring:
     jdbc:
       initialize-schema: always
     job:
-      # Spring Boot 자동 실행 끔. HiraBatchRunner가 실행함 (--job=이름, --restart)
+      # Spring Boot 자동 실행 끔. HiraBatchRunner가 실행함
       enabled: false
 
 hira:

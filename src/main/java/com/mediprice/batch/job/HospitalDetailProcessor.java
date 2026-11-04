@@ -13,8 +13,6 @@ import com.mediprice.batch.hira.HiraPage;
 @Component
 public class HospitalDetailProcessor implements ItemProcessor<String, HospitalDetailProcessor.DetailRow> {
 
-    // ykiho : 병원 고유키
-    // detail : 세부정보 응답 item 1건 (없으면 null)
     public record DetailRow(String ykiho, Map<String, String> detail) {
     }
 
