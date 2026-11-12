@@ -229,6 +229,24 @@ class CleanupFlowTest {
         assertThat(fresh.getStatus()).as(failures(fresh)).isEqualTo(BatchStatus.COMPLETED);
         assertThat(hospitalExists("h1000")).isTrue();
     }
+    
+    @Test
+    void 항목_목록에_없는_코드가_가격에_먼저_나오면_restart로는_복구안되고_새실행으로_복구됨() throws Exception {
+        hira.rows.get(PRICE).add(price("h0", 2, "i2"));
+        JobExecution first = run(W1);
+        assertThat(first.getStatus()).isEqualTo(BatchStatus.FAILED);
+        assertThat(failures(first)).contains("Referential integrity");
+
+        // HIRA 항목 목록에 i2가 생겨도 완료된 npayItemStep은 건너뛰어서 다시 읽지 않음
+        items.add("i2");
+        JobExecution second = jobOperator.start(hiraSyncJob, params(W1));
+        assertThat(second.getStatus()).isEqualTo(BatchStatus.FAILED);
+        assertThat(count("SELECT count(*) FROM npay_item WHERE npay_cd = :v", "i2")).isZero();
+
+        JobExecution fresh = run(W1.plusWeeks(1));
+        assertThat(fresh.getStatus()).as(failures(fresh)).isEqualTo(BatchStatus.COMPLETED);
+        assertThat(priceExists("h0", 2)).isTrue();
+    }
 
     @Test
     void 정리_실패시_앞_테이블의_삭제도_되돌아감() throws Exception {
