@@ -67,6 +67,20 @@ HIRA_SERVICE_KEY=<공공데이터포털 일반 인증키 (Decoding)>
 - 배치가 실패하면 종료 코드 1로 끝나고 Gradle이 `BUILD FAILED`를 표시합니다.
 - Spring Batch 실행 기록 테이블(`batch_*`)은 처음 실행할 때 자동으로 만들어집니다.
 
+### 4. Docker로 실행
+
+`.env` 파일이 프로젝트 폴더에 있어야 합니다 (2번 참고).
+
+```powershell
+docker compose build                              # 이미지 만들기 (코드가 바뀌면 다시)
+docker compose run --rm batch                     # 전체 동기화
+docker compose run --rm batch --restart           # 실패한 지점부터 이어서
+docker compose run --rm batch --job=hiraCodeJob   # 특정 Job만
+```
+
+- 종료 코드: 성공 0, 실패 1
+- 컨테이너 시간대는 `Asia/Seoul`로 고정되어 있습니다.
+
 ## Job 구성
 
 | Job | 포함 Step | 용도 |
