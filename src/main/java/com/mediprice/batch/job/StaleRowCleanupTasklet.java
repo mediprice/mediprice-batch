@@ -30,6 +30,7 @@ import com.mediprice.batch.KoreaTime;
 //  - <테이블>_seen: 값이 바뀐 행만 쓰는 테이블(hospital, hospital_npay_price). Writer가 본 키를 따로 적어 둔 행.
 //    안 보인 행에는 missed_since(처음 안 보인 실행의 기준 시각)를 표시하고, 직전 성공 실행 때도 이미 안 보였던 행을 지움.
 //    이 Step이 성공하면 _seen을 비움 (실패하면 롤백되어 남고, 다음 실행 키와 합쳐 "본 행"으로 침 → 덜 지울 뿐 더 지우지 않음)
+//    단 건수 검사는 이번 실행 기준 시각(requested_at)의 키만 셈. 실패한 실행의 키로 부풀면 읽다 놓친 행을 못 잡음
 public class StaleRowCleanupTasklet implements Tasklet {
 
     private static final Logger log = LoggerFactory.getLogger(StaleRowCleanupTasklet.class);
@@ -116,12 +117,14 @@ public class StaleRowCleanupTasklet implements Tasklet {
     }
 
     // 이번 실행에서 본(갱신된) 행 수. _seen은 처음부터 다시 읽은 페이지가 겹쳐 들어갈 수 있어 키를 중복 없이 셈
+    // 이어서 실행(--restart)은 requestedAt이 같아 앞 시도에서 본 키도 이번 실행 것으로 셈
     private String freshCountSql(String table) {
         List<String> keys = seenKeys.get(table);
         if (keys == null) {
             return "SELECT count(*) FROM " + table + " WHERE synced_at >= :cutoff";
         }
-        return "SELECT count(*) FROM (SELECT DISTINCT " + String.join(", ", keys) + " FROM " + seenTable(table) + ") s";
+        return "SELECT count(*) FROM (SELECT DISTINCT " + String.join(", ", keys) + " FROM " + seenTable(table)
+                + " WHERE requested_at = :runAt) s";
     }
 
     // 삭제 대상 = 이번 실행과 직전 성공 실행에서 모두 안 보인 행

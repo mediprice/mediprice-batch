@@ -155,6 +155,7 @@ src/main/java/com/mediprice/batch/
 - **upsert:** 모든 저장은 키가 같으면 덮어쓰는 upsert입니다. 여러 번 실행해도 중복이 생기지 않습니다.
 - **바뀐 행만 쓰기:** 병원(`hospital`)·가격(`hospital_npay_price`)·가격 이력은 값이 바뀐 행만 다시 씁니다. 값이 같은 행까지 매주 다시 쓰면 28만 행이 새로 기록돼 테이블·인덱스가 불어나고 Neon 저장 비용(WAL)이 늘기 때문입니다. 그래서 이 두 테이블의 `synced_at`은 "마지막으로 값이 바뀐 시각"이고, 이번 실행에서 본 키는 `hospital_seen`, `hospital_npay_price_seen`에 따로 적습니다.
 - **사라진 행 삭제:** 정리 Step은 두 번 연속 안 보인 행을 "HIRA에서 사라진 데이터"로 보고 삭제합니다. 코드 테이블·비급여 항목·병원 상세는 직전 성공 실행의 기준 시각보다 `synced_at`이 오래된 행을, 병원·가격은 이번 실행에 안 보여 `missed_since`가 표시된 행 중 직전 성공 실행 때도 이미 안 보였던 행을 지웁니다. 그래서 실제로 없어진 데이터는 한 번 더 남아 있습니다. 정리 Step이 성공하면 `*_seen`을 비웁니다. 이번 실행에서 본(갱신된) 행이 0건인 테이블과 직전 성공 실행이 없는 경우에는 삭제를 건너뜁니다. 다른 테이블이 참조 중인 행(가격이 남은 병원·비급여 항목, 시군구가 남은 시도)은 지우지 않고 경고 로그를 남깁니다.
+  - 이 버전에서 예전 배치 코드로 되돌렸다가 다시 올릴 때는, 다시 올린 첫 실행 전에 `UPDATE hospital SET missed_since = NULL WHERE missed_since IS NOT NULL;`, `UPDATE hospital_npay_price SET missed_since = NULL WHERE missed_since IS NOT NULL;`, `TRUNCATE hospital_seen, hospital_npay_price_seen;`을 실행합니다. 예전 배치는 `missed_since`를 지우지 않아 그 사이 다시 나타난 행이 한 번만 안 보여도 지워질 수 있습니다.
 - **원본 미보관:** API 응답 원본은 저장하지 않습니다(읽는 곳이 없고 가격 테이블의 75%를 차지했음). 필요한 값은 컬럼으로 둡니다.
 - **XML 사용:** JSON 응답은 `"01"` 같은 코드값의 앞자리 0이 사라져서 XML로 받습니다.
 - **전체 건수 검증:** 페이지 Reader는 읽은 건수가 HIRA의 `totalCount`와 다르면 Step을 실패시킵니다. 읽는 도중이나 재시작 사이에 `totalCount`가 바뀌면 1페이지부터 다시 읽습니다 (최대 3번). 정리 Step은 `hospital`, `hospital_npay_price`에서 이번 실행에 본 키 수(`*_seen`, 중복 제외)가 `totalCount`보다 적으면 삭제하지 않고 실패합니다.

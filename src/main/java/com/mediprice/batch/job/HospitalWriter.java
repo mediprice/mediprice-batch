@@ -39,8 +39,8 @@ public class HospitalWriter extends HiraUpsertWriter {
                        CAST(NULLIF(:XPos, '') AS double precision) AS x_pos,
                        CAST(NULLIF(:YPos, '') AS double precision) AS y_pos
             ), seen AS (
-                INSERT INTO hospital_seen (ykiho)
-                SELECT ykiho FROM v
+                INSERT INTO hospital_seen (ykiho, requested_at)
+                SELECT ykiho, CAST(:requestedAt AS timestamptz) FROM v
             ), added AS (
                 INSERT INTO hospital (
                     ykiho, yadm_nm, cl_cd, cl_cd_nm,

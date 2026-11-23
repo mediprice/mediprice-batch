@@ -3,6 +3,8 @@ package com.mediprice.batch.job;
 import java.util.List;
 import java.util.Map;
 
+import javax.sql.DataSource;
+
 import org.springframework.batch.core.job.Job;
 import org.springframework.batch.core.job.builder.JobBuilder;
 import org.springframework.batch.core.listener.ExecutionContextPromotionListener;
@@ -231,10 +233,10 @@ public class HiraSyncJobConfig {
 
     // 배치가 쓴 큰 테이블 VACUUM (ANALYZE). VACUUM은 트랜잭션 밖에서만 돌아서 트랜잭션 없이 실행
     @Bean
-    public Step vacuumStep(JobRepository jobRepository, NamedParameterJdbcTemplate jdbcTemplate) {
+    public Step vacuumStep(JobRepository jobRepository, DataSource dataSource) {
         List<String> tables = List.of("hospital_npay_price", "hospital", "npay_price_history", "hospital_detail");
         return new StepBuilder("vacuumStep", jobRepository)
-                .tasklet(new VacuumTasklet(jdbcTemplate.getJdbcOperations(), tables), new ResourcelessTransactionManager())
+                .tasklet(new VacuumTasklet(dataSource, tables), new ResourcelessTransactionManager())
                 .build();
     }
 

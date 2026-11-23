@@ -15,7 +15,7 @@ public class NpayPriceWriter extends HiraUpsertWriter {
             "curAmt", "adtFrDd", "adtEndDd");
 
     // 한 문장으로 세 가지를 함 (값 변환은 v에서 한 번만)
-    //  1. seen: 이번 실행에 본 키를 적음. 정리 Step이 이걸로 사라진 행을 판단함
+    //  1. seen: 이번 실행에 본 키를 실행 기준 시각과 함께 적음. 정리 Step이 이걸로 사라진 행을 판단함
     //  2. added: 없던 행 추가. 이미 있으면 아무것도 안 함
     //  3. UPDATE: 값이 바뀐 행만 갱신. 같으면 행을 다시 쓰지 않음 (매주 28만 행 재기록과 인덱스 bloat 방지)
     // ON CONFLICT DO UPDATE ... WHERE는 값이 같아도 충돌한 행마다 행 잠금을 기록해서(WAL) 쓰지 않음
@@ -29,8 +29,8 @@ public class NpayPriceWriter extends HiraUpsertWriter {
                        to_date(NULLIF(:adtFrDd, ''), 'YYYYMMDD') AS adt_fr_dd,
                        to_date(NULLIF(:adtEndDd, ''), 'YYYYMMDD') AS adt_end_dd
             ), seen AS (
-                INSERT INTO hospital_npay_price_seen (ykiho, sno)
-                SELECT ykiho, sno FROM v
+                INSERT INTO hospital_npay_price_seen (ykiho, sno, requested_at)
+                SELECT ykiho, sno, CAST(:requestedAt AS timestamptz) FROM v
             ), added AS (
                 INSERT INTO hospital_npay_price (
                     ykiho, sno, npay_cd, yadm_npay_cd_nm,
