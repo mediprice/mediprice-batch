@@ -66,7 +66,7 @@ class HiraBatchRunnerTest {
     @BeforeEach
     void setUp() {
         runs = 0;
-        runner = new HiraBatchRunner(jobOperator, jobRepository, Map.of("testJob", testJob));
+        runner = new HiraBatchRunner(jobOperator, jobRepository, Map.of("testJob", testJob), KoreaTime.clock());
     }
 
     JobExecution leftStarted() {

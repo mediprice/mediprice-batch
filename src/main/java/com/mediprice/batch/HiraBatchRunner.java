@@ -47,10 +47,6 @@ public class HiraBatchRunner implements ApplicationRunner, ExitCodeGenerator {
 
     private int exitCode = 0;
 
-    public HiraBatchRunner(JobOperator jobOperator, JobRepository jobRepository, Map<String, Job> jobs) {
-        this(jobOperator, jobRepository, jobs, KoreaTime.clock());
-    }
-
     public HiraBatchRunner(JobOperator jobOperator, JobRepository jobRepository, Map<String, Job> jobs, Clock clock) {
         this.clock = clock;
         this.jobOperator = jobOperator;
@@ -98,6 +94,7 @@ public class HiraBatchRunner implements ApplicationRunner, ExitCodeGenerator {
 
     // "실행 중" 상태만으로는 꺼진 실행과 구분이 안 돼서 마지막 기록 시각으로 판단
     private boolean isAlive(JobExecution execution) {
+        // Spring Batch 실행 기록 시각은 JVM 기본 시간대(main이 Asia/Seoul로 고정)라 Clock이 아닌 now()와 비교
         LocalDateTime limit = LocalDateTime.now().minus(DEAD_AFTER);
         return isAfter(execution.getLastUpdated(), limit)
                 || execution.getStepExecutions().stream().anyMatch(step -> isAfter(step.getLastUpdated(), limit));
