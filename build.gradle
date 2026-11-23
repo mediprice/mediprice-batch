@@ -27,6 +27,10 @@ dependencies {
 	testCompileOnly 'org.projectlombok:lombok'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 	testRuntimeOnly 'com.h2database:h2'
+	// Postgres 전용 SQL(upsert·정리·VACUUM)을 실제 PostGIS 컨테이너로 확인. Docker가 없으면 그 테스트만 건너뜀
+	testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+	testImplementation 'org.testcontainers:testcontainers-postgresql'
+	testRuntimeOnly 'org.postgresql:postgresql'
 	testAnnotationProcessor 'org.projectlombok:lombok'
 }
 

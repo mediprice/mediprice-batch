@@ -1,22 +1,32 @@
 -- =====================================================================
 -- MediPrice - HIRA 공공데이터 동기화 스키마 (PostgreSQL / Neon)
 --
--- 테이블 8개
+-- 테이블 10개
 --   코드     : region_sido, region_sggu, institution_class
 --   병원     : hospital, hospital_detail
 --   비급여   : npay_item, hospital_npay_price, npay_price_history
+--   배치 작업용 : hospital_seen, hospital_npay_price_seen (이번 실행에서 본 키. 정리 Step이 비움)
+--
+-- 이 파일은 새 DB를 만들 때 쓰는 최종 모양이다. 이미 있는 DB에는 db/changes/의 파일을 번호 순서대로 적용한다.
 --
 -- 설계 원칙
---  1. 조회·필터에 쓰는 값만 컬럼으로 만들고, API 응답 원본은 raw(jsonb)에 통째로 보관한다.
+--  1. 조회·필터에 쓰는 값만 컬럼으로 만든다. API 응답 원본(raw jsonb)은 읽는 곳이 없어 저장하지 않는다.
+--     (원본이 가격 테이블의 75%를 차지했다. 필요하면 HIRA에서 다시 받는다)
 --  2. 컬럼명은 API 필드명을 snake_case로 바꾼 이름을 쓴다. (curAmt -> cur_amt)
 --  3. 코드값(시도·종별·우편번호 등)은 전부 문자열로 저장한다. ("01"의 앞자리 0 유실 방지)
---  4. 동기화 테이블은 synced_at(마지막 저장 시각)을 가진다. 배치는 upsert 후
---     이번 실행과 직전 성공 실행에서 모두 갱신되지 않은 행(synced_at < 직전 성공 실행 시작 시각)을 삭제한다.
---     단, npay_price_history는 삭제하지 않는다.
+--  4. 동기화 테이블은 synced_at을 가진다. 배치는 upsert 후
+--     이번 실행과 직전 성공 실행에서 모두 안 보인 행을 "HIRA에서 사라진 데이터"로 보고 삭제한다.
+--     - hospital, hospital_npay_price: 값이 바뀐 행만 다시 쓴다(synced_at = 마지막으로 값이 바뀐 시각).
+--       이번 실행에 본 키는 *_seen 테이블에 적고, 정리 Step이 안 보인 행에 missed_since를 표시해
+--       직전 성공 실행 때도 이미 안 보였던 행(missed_since <= 직전 성공 실행 기준 시각)을 삭제한다.
+--     - 나머지(코드 테이블, npay_item, hospital_detail): 매번 다시 쓴다(synced_at = 마지막 저장 시각).
+--       synced_at < 직전 성공 실행 시작 시각인 행을 삭제한다.
+--     단, npay_price_history는 정리 Step이 삭제하지 않는다.
 --     다른 테이블이 참조 중인 행(가격이 남은 병원·비급여 항목, 시군구가 남은 시도)도 삭제하지 않고 경고 로그를 남긴다.
 -- =====================================================================
 
 CREATE EXTENSION IF NOT EXISTS postgis;   -- 지도 반경 검색, 거리 계산
+CREATE EXTENSION IF NOT EXISTS pg_trgm;   -- 병원명 부분 검색 (yadm_nm ILIKE '%...%') 인덱스
 
 
 -- =====================================================================
@@ -70,7 +80,7 @@ CREATE TABLE hospital (
     telno       text,                              -- 대표 전화번호
     hosp_url    text,                              -- 홈페이지 (약 25%만 있음)
     estb_dd     date,                              -- 개설일자 (API "19790324" -> date)
-    dr_tot_cnt  integer,                           -- 의사 총수 (과별 인원수는 raw)
+    dr_tot_cnt  integer,                           -- 의사 총수
     x_pos       double precision,                  -- 경도 (API 필드 XPos)
     y_pos       double precision,                  -- 위도 (API 필드 YPos)
     geog        geography(Point, 4326) GENERATED ALWAYS AS (
@@ -78,13 +88,16 @@ CREATE TABLE hospital (
                          THEN ST_SetSRID(ST_MakePoint(x_pos, y_pos), 4326)::geography
                     END
                 ) STORED,                          -- 위치 (x_pos, y_pos로 자동 계산. 배치가 넣지 않음)
-    raw         jsonb,                             -- API 응답 원본
-    synced_at   timestamptz NOT NULL DEFAULT now()
+    synced_at   timestamptz NOT NULL DEFAULT now(), -- 마지막으로 값이 바뀐(처음 저장된) 시각
+    missed_since timestamptz                       -- 정리 Step이 이 행을 처음 못 본 실행의 기준 시각. 다시 보이면 NULL
 );
 
-CREATE INDEX idx_hospital_region ON hospital (sido_cd, sggu_cd);  -- 지역 필터
-CREATE INDEX idx_hospital_cl_cd  ON hospital (cl_cd);             -- 종별 필터
+-- 지역·종별 필터. 가격 목록의 병원 조인에서 heap을 읽지 않게 ykiho를 포함 (idx_hospital_region (sido_cd, sggu_cd)를 대체)
+CREATE INDEX idx_hospital_filter ON hospital (sido_cd, sggu_cd, cl_cd) INCLUDE (ykiho);
+CREATE INDEX idx_hospital_cl_cd  ON hospital (cl_cd);             -- 종별만 거는 필터 (시도 없이)
 CREATE INDEX idx_hospital_geog   ON hospital USING gist (geog);   -- 지도 반경 검색, 거리순 정렬
+-- 병원명 부분 검색. 3글자 이상 검색어만 인덱스를 탄다 (2글자는 trigram을 만들 수 없어 전체를 훑음)
+CREATE INDEX idx_hospital_name_trgm ON hospital USING gin (yadm_nm gin_trgm_ops);
 
 -- 병원 상세: 진료시간·주차·응급실 (의료기관별상세정보서비스 getDtlInfo2.8)
 -- 대상: 가격 데이터가 있는 병원 (4,002곳 - 2026-10-07 기준). 병원마다 1번씩 호출한다.
@@ -123,7 +136,6 @@ CREATE TABLE npay_item (
     cmmt_txt            text,                      -- 항목 설명 (항목에 따라 없음)
     adt_fr_dd           date,                      -- 적용 시작일
     adt_end_dd          date,                      -- 적용 종료일 (9999-12-31 = 현재 유효)
-    raw                 jsonb,                     -- API 응답 원본
     synced_at           timestamptz NOT NULL DEFAULT now()
 );
 
@@ -145,19 +157,21 @@ CREATE TABLE hospital_npay_price (
     cur_amt          bigint      NOT NULL,         -- 현재금액 (원). 0원은 실제 무료 (증명서 수수료 등)
     adt_fr_dd        date,                         -- 병원이 이 가격을 적용하기 시작한 날
     adt_end_dd       date,                         -- 적용 종료일 (9999-12-31 = 현재 유효)
-    raw              jsonb,                        -- API 응답 원본
-    synced_at        timestamptz NOT NULL DEFAULT now(),
+    synced_at        timestamptz NOT NULL DEFAULT now(), -- 마지막으로 값이 바뀐(처음 저장된) 시각
+    missed_since     timestamptz,                  -- 정리 Step이 이 행을 처음 못 본 실행의 기준 시각. 다시 보이면 NULL
     PRIMARY KEY (ykiho, sno)
 );
 
-CREATE INDEX idx_price_item_amt ON hospital_npay_price (npay_cd, cur_amt);  -- 항목별 최저가 조회
+-- 항목별 가격 요약·목록·근처 최저가. (ykiho, sno)까지 넣어 heap을 읽지 않고(index-only) 목록 정렬 순서와도 맞춤
+CREATE INDEX idx_price_item_cover ON hospital_npay_price (npay_cd, cur_amt, ykiho, sno);
 
 -- 월별 가격 이력 (hospital_npay_price를 매달 복사, 한 달 약 28만 행 추가)
 -- HIRA API는 현재 가격만 주므로, 가격 변동 추이를 보려면 지금부터 쌓아야 한다.
 -- FK를 걸지 않는다: 병원이 폐업해 hospital에서 삭제돼도 과거 가격 기록은 남긴다.
 -- 배치 정리 단계에서 삭제하지 않는다.
--- 같은 달에 배치가 여러 번 돌면 그 달 행을 최신 값으로 덮어쓴다.
+-- 같은 달에 배치가 여러 번 돌면 그 달 행을 현재 가격에 맞춘다 (바뀐 행만 갱신, 새 행 추가, 현재 가격에 없는 행 삭제).
 -- 그래프는 (ykiho, npay_cd, yadm_npay_cd_nm)으로 묶어 월별로 잇는다.
+-- PK가 곧 조회 인덱스다: 병원·항목별 월 범위 조회(ykiho =, npay_cd =, snapshot_month between)가 PK 앞부분을 쓴다.
 CREATE TABLE npay_price_history (
     snapshot_month   date        NOT NULL          -- 기준 월 (매월 1일, 예: 2026-10-01)
                      CHECK (extract(day FROM snapshot_month) = 1),
@@ -167,8 +181,25 @@ CREATE TABLE npay_price_history (
     yadm_npay_cd_nm  text,                         -- 병원 자체 항목명
     cur_amt          bigint      NOT NULL,         -- 그 달의 금액 (원)
     synced_at        timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (snapshot_month, ykiho, sno)
+    PRIMARY KEY (ykiho, npay_cd, snapshot_month, sno)
 );
 
-CREATE INDEX idx_history_hospital_item
-    ON npay_price_history (ykiho, npay_cd, snapshot_month);  -- 병원·항목별 가격 추이 그래프
+
+-- =====================================================================
+-- 4. 배치 작업용 (정리 Step 전용. 서비스는 읽지 않음)
+-- =====================================================================
+
+-- 이번 실행에서 HIRA 목록에 보인 키. 병원·가격 Writer가 값이 같은 행은 다시 쓰지 않으므로
+-- "이번 실행에 본 행"을 synced_at 대신 여기에 적는다. 정리 Step이 성공하면 TRUNCATE로 비운다.
+-- - 인덱스·PK 없음: 쓰는 양을 줄이려고. 정리 Step이 한 번 해시 조인으로 읽고, 중복(처음부터 다시 읽은 페이지)은 DISTINCT로 센다.
+-- - 실패한 실행이 남긴 키는 다음 정리 성공 때까지 남는다. 그 키를 "봤다"로 쳐서 삭제가 한 번 늦어질 뿐 잘못 지우지는 않는다.
+-- - UNLOGGED로 만들지 않는다: compute가 다시 시작되면(Neon 자동 일시정지 포함) 비워질 수 있어
+--   --restart로 이어서 실행할 때 앞에서 본 키가 사라진다.
+CREATE TABLE hospital_seen (
+    ykiho  text NOT NULL
+);
+
+CREATE TABLE hospital_npay_price_seen (
+    ykiho  text    NOT NULL,
+    sno    integer NOT NULL
+);

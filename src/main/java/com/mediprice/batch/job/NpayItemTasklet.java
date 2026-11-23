@@ -15,8 +15,6 @@ import org.springframework.stereotype.Component;
 import com.mediprice.batch.hira.HiraClient;
 import com.mediprice.batch.hira.HiraPage;
 
-import tools.jackson.databind.json.JsonMapper;
-
 // 비급여 항목 → npay_item 저장 (비급여 3번 getNonPaymentItemCodeList2)
 @Component
 public class NpayItemTasklet implements Tasklet {
@@ -37,7 +35,7 @@ public class NpayItemTasklet implements Tasklet {
                 npay_sdiv_cd, npay_sdiv_cd_nm,
                 npay_dtl_div_cd, npay_dtl_div_cd_nm,
                 cmmt_txt, adt_fr_dd, adt_end_dd,
-                raw, synced_at)
+                synced_at)
             VALUES (
                 :npayCd, :npayKorNm,
                 :npayMdivCd, :npayMdivCdNm,
@@ -46,7 +44,7 @@ public class NpayItemTasklet implements Tasklet {
                 :cmmtTxt,
                 to_date(NULLIF(:adtFrDd, ''), 'YYYYMMDD'),
                 to_date(NULLIF(:adtEndDd, ''), 'YYYYMMDD'),
-                CAST(:raw AS jsonb), now())
+                now())
             ON CONFLICT (npay_cd) DO UPDATE SET
                 npay_kor_nm        = EXCLUDED.npay_kor_nm,
                 npay_mdiv_cd       = EXCLUDED.npay_mdiv_cd,
@@ -58,18 +56,15 @@ public class NpayItemTasklet implements Tasklet {
                 cmmt_txt           = EXCLUDED.cmmt_txt,
                 adt_fr_dd          = EXCLUDED.adt_fr_dd,
                 adt_end_dd         = EXCLUDED.adt_end_dd,
-                raw                = EXCLUDED.raw,
                 synced_at          = now()
             """;
 
     private final HiraClient hiraClient;
     private final NamedParameterJdbcTemplate jdbcTemplate;
-    private final JsonMapper jsonMapper;
 
-    public NpayItemTasklet(HiraClient hiraClient, NamedParameterJdbcTemplate jdbcTemplate, JsonMapper jsonMapper) {
+    public NpayItemTasklet(HiraClient hiraClient, NamedParameterJdbcTemplate jdbcTemplate) {
         this.hiraClient = hiraClient;
         this.jdbcTemplate = jdbcTemplate;
-        this.jsonMapper = jsonMapper;
     }
 
     @Override
@@ -100,7 +95,6 @@ public class NpayItemTasklet implements Tasklet {
         for (String field : FIELDS) {
             params.addValue(field, item.get(field));
         }
-        params.addValue("raw", jsonMapper.writeValueAsString(item));
         return params;
     }
 }

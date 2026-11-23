@@ -80,9 +80,11 @@ class CleanupFlowTest {
         d.execute("CREATE TABLE region_sggu (sggu_cd varchar primary key, sido_cd varchar references region_sido (sido_cd), synced_at timestamp with time zone not null)");
         d.execute("CREATE TABLE institution_class (cl_cd varchar primary key, synced_at timestamp with time zone not null)");
         d.execute("CREATE TABLE npay_item (npay_cd varchar primary key, synced_at timestamp with time zone not null)");
-        d.execute("CREATE TABLE hospital (ykiho varchar primary key, synced_at timestamp with time zone not null)");
+        d.execute("CREATE TABLE hospital (ykiho varchar primary key, synced_at timestamp with time zone not null, missed_since timestamp with time zone)");
+        d.execute("CREATE TABLE hospital_seen (ykiho varchar not null)");
         d.execute("CREATE TABLE hospital_detail (ykiho varchar primary key references hospital (ykiho) on delete cascade, synced_at timestamp with time zone not null)");
-        d.execute("CREATE TABLE hospital_npay_price (ykiho varchar not null references hospital (ykiho) on delete cascade, sno int not null, npay_cd varchar not null references npay_item (npay_cd), synced_at timestamp with time zone not null, primary key (ykiho, sno))");
+        d.execute("CREATE TABLE hospital_npay_price (ykiho varchar not null references hospital (ykiho) on delete cascade, sno int not null, npay_cd varchar not null references npay_item (npay_cd), synced_at timestamp with time zone not null, missed_since timestamp with time zone, primary key (ykiho, sno))");
+        d.execute("CREATE TABLE hospital_npay_price_seen (ykiho varchar not null, sno int not null)");
 
         failPriceAtChunk = -1;
         items = new HashSet<>(Set.of("i1"));
@@ -153,7 +155,7 @@ class CleanupFlowTest {
 
     @Test
     void 첫_실행은_직전_성공이_없어_아무것도_안_지우고_전체건수를_Job기록에_올림() throws Exception {
-        jdbc.update("INSERT INTO hospital VALUES (:v, :t)", new MapSqlParameterSource("v", "old")
+        jdbc.update("INSERT INTO hospital (ykiho, synced_at) VALUES (:v, :t)", new MapSqlParameterSource("v", "old")
                 .addValue("t", W1.minusWeeks(10).atZone(KoreaTime.ZONE).toOffsetDateTime()));
 
         JobExecution e = run(W1);
@@ -388,6 +390,15 @@ class CleanupFlowTest {
         assertThat(output.getOut()).contains("institution_class: 이번 실행에서 갱신된 행이 없어 삭제를 건너뜀");
     }
 
+    @Test
+    void VACUUM이_실패해도_경고만_남기고_배치는_성공(CapturedOutput output) throws Exception {
+        // H2에는 VACUUM이 없어 항상 실패함
+        JobExecution e = run(W1);
+
+        assertThat(e.getStatus()).as(failures(e)).isEqualTo(BatchStatus.COMPLETED);
+        assertThat(output.getOut()).contains("hospital_npay_price: VACUUM (ANALYZE) 실패, 배치는 성공으로 둠");
+    }
+
     static class FakeHira extends HiraClient {
         final Map<String, List<Map<String, String>>> rows = new HashMap<>();
         final Map<String, Runnable> before = new HashMap<>();
@@ -417,7 +428,7 @@ class CleanupFlowTest {
         final NamedParameterJdbcTemplate jdbc;
 
         TestHospitalWriter(NamedParameterJdbcTemplate jdbc) {
-            super(jdbc, null);
+            super(jdbc);
             this.jdbc = jdbc;
         }
 
@@ -426,6 +437,7 @@ class CleanupFlowTest {
             for (Map<String, String> item : chunk.getItems()) {
                 jdbc.update("MERGE INTO hospital (ykiho, synced_at) KEY (ykiho) VALUES (:y, :t)",
                         new MapSqlParameterSource("y", item.get("ykiho")).addValue("t", now));
+                jdbc.update("INSERT INTO hospital_seen VALUES (:y)", new MapSqlParameterSource("y", item.get("ykiho")));
             }
         }
     }
@@ -434,7 +446,7 @@ class CleanupFlowTest {
         final NamedParameterJdbcTemplate jdbc;
 
         TestPriceWriter(NamedParameterJdbcTemplate jdbc) {
-            super(jdbc, null);
+            super(jdbc);
             this.jdbc = jdbc;
         }
 
@@ -449,6 +461,8 @@ class CleanupFlowTest {
                                 .addValue("s", Integer.parseInt(item.get("sno")))
                                 .addValue("c", item.get("npayCd"))
                                 .addValue("t", now));
+                jdbc.update("INSERT INTO hospital_npay_price_seen VALUES (:y, :s)", new MapSqlParameterSource("y", item.get("ykiho"))
+                        .addValue("s", Integer.parseInt(item.get("sno"))));
             }
         }
     }

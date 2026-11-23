@@ -9,21 +9,16 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.core.namedparam.SqlParameterSource;
 
-import tools.jackson.databind.json.JsonMapper;
-
-// item 묶음(chunk)을 한 번에 upsert하는 공통 Writer. 테이블마다 SQL과 필드 목록만 다르게 넘김
+// item 묶음(chunk)을 한 번에 저장하는 공통 Writer. 테이블마다 SQL과 필드 목록만 다르게 넘김
 public class HiraUpsertWriter implements ItemWriter<Map<String, String>> {
 
     private final NamedParameterJdbcTemplate jdbcTemplate;
-    private final JsonMapper jsonMapper;
     private final String sql;
     private final List<String> fields;
 
-    // SQL의 :ykiho 같은 파라미터 이름이 HIRA 응답 필드 이름과 같아야 함. 원본은 :raw로 넘어감
-    public HiraUpsertWriter(NamedParameterJdbcTemplate jdbcTemplate, JsonMapper jsonMapper,
-                            String sql, List<String> fields) {
+    // SQL의 :ykiho 같은 파라미터 이름이 HIRA 응답 필드 이름과 같아야 함. 목록에 없는 응답 필드는 저장하지 않음
+    public HiraUpsertWriter(NamedParameterJdbcTemplate jdbcTemplate, String sql, List<String> fields) {
         this.jdbcTemplate = jdbcTemplate;
-        this.jsonMapper = jsonMapper;
         this.sql = sql;
         this.fields = fields;
     }
@@ -42,7 +37,6 @@ public class HiraUpsertWriter implements ItemWriter<Map<String, String>> {
         for (String field : fields) {
             params.addValue(field, item.get(field));
         }
-        params.addValue("raw", jsonMapper.writeValueAsString(item));
         return params;
     }
 }

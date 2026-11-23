@@ -9,6 +9,7 @@ import org.springframework.batch.core.listener.ExecutionContextPromotionListener
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.core.step.Step;
 import org.springframework.batch.core.step.builder.StepBuilder;
+import org.springframework.batch.infrastructure.support.transaction.ResourcelessTransactionManager;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -30,13 +31,13 @@ public class HiraSyncJobConfig {
     private static final String HOSPITAL_TOTAL_KEY = StaleRowCleanupTasklet.totalCountKey("hospital");
     private static final String PRICE_TOTAL_KEY = StaleRowCleanupTasklet.totalCountKey("hospital_npay_price");
 
-    // 전체 동기화: 코드 → 항목 → 병원 → 가격 → 정리 → 가격 이력 → 병원 상세 → 상세 정리
+    // 전체 동기화: 코드 → 항목 → 병원 → 가격 → 정리 → 가격 이력 → 병원 상세 → 상세 정리 → VACUUM
     @Bean
     public Job hiraSyncJob(JobRepository jobRepository,
                            Step sidoStep, Step sgguStep, Step institutionClassStep,
                            Step npayItemStep, Step hospitalStep, Step npayPriceStep,
                            Step syncCleanupStep, Step priceHistoryStep,
-                           Step hospitalDetailStep, Step detailCleanupStep) {
+                           Step hospitalDetailStep, Step detailCleanupStep, Step vacuumStep) {
         return new JobBuilder("hiraSyncJob", jobRepository)
                 .start(sidoStep)
                 .next(sgguStep)
@@ -48,6 +49,7 @@ public class HiraSyncJobConfig {
                 .next(priceHistoryStep)
                 .next(hospitalDetailStep)
                 .next(detailCleanupStep)
+                .next(vacuumStep)
                 .build();
     }
 
@@ -158,8 +160,12 @@ public class HiraSyncJobConfig {
                 "hospital", "NOT EXISTS (SELECT 1 FROM hospital_npay_price p WHERE p.ykiho = hospital.ykiho)",
                 "npay_item", "NOT EXISTS (SELECT 1 FROM hospital_npay_price p WHERE p.npay_cd = npay_item.npay_cd)",
                 "region_sido", "NOT EXISTS (SELECT 1 FROM region_sggu s WHERE s.sido_cd = region_sido.sido_cd)");
+        // 값이 바뀐 행만 쓰는 테이블은 Writer가 적은 _seen 키로 "이번 실행에 본 행"을 판단
+        Map<String, List<String>> seenKeys = Map.of(
+                "hospital_npay_price", List.of("ykiho", "sno"),
+                "hospital", List.of("ykiho"));
         return new StepBuilder("syncCleanupStep", jobRepository)
-                .tasklet(new StaleRowCleanupTasklet(jdbcTemplate, jobRepository, tables, deleteGuards), transactionManager)
+                .tasklet(new StaleRowCleanupTasklet(jdbcTemplate, jobRepository, tables, deleteGuards, seenKeys), transactionManager)
                 .build();
     }
 
@@ -195,7 +201,16 @@ public class HiraSyncJobConfig {
                                   PlatformTransactionManager transactionManager,
                                   NamedParameterJdbcTemplate jdbcTemplate) {
         return new StepBuilder("detailCleanupStep", jobRepository)
-                .tasklet(new StaleRowCleanupTasklet(jdbcTemplate, jobRepository, List.of("hospital_detail"), Map.of()), transactionManager)
+                .tasklet(new StaleRowCleanupTasklet(jdbcTemplate, jobRepository, List.of("hospital_detail"), Map.of(), Map.of()), transactionManager)
+                .build();
+    }
+
+    // 배치가 쓴 큰 테이블 VACUUM (ANALYZE). VACUUM은 트랜잭션 밖에서만 돌아서 트랜잭션 없이 실행
+    @Bean
+    public Step vacuumStep(JobRepository jobRepository, NamedParameterJdbcTemplate jdbcTemplate) {
+        List<String> tables = List.of("hospital_npay_price", "hospital", "npay_price_history", "hospital_detail");
+        return new StepBuilder("vacuumStep", jobRepository)
+                .tasklet(new VacuumTasklet(jdbcTemplate.getJdbcOperations(), tables), new ResourcelessTransactionManager())
                 .build();
     }
 

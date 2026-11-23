@@ -188,7 +188,7 @@ class HiraBatchRunnerTest {
 
         assertThatThrownBy(() -> new PriceHistoryTasklet(template).execute(mock(StepContribution.class), context))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("requestedAt");
-        assertThatThrownBy(() -> new StaleRowCleanupTasklet(template, jobRepository, List.of("t"), Map.of())
+        assertThatThrownBy(() -> new StaleRowCleanupTasklet(template, jobRepository, List.of("t"), Map.of(), Map.of())
                 .execute(mock(StepContribution.class), context))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("requestedAt");
     }
