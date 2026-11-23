@@ -9,8 +9,10 @@
 --     뜻은 지금 백엔드(HospitalNpayPriceRepository.findSitemapEntries)와 같다:
 --     max(adt_fr_dd) FILTER (WHERE adt_fr_dd <= 오늘). 미래 날짜 lastmod는 검색엔진이 무시하므로 뺀다.
 --     이후에는 배치가 상세 단계 뒤에 매번 채운다 (바뀐 행만 씀).
--- 잠금 영향: ADD COLUMN(기본값 없음)은 카탈로그만 바꿔 즉시 끝나지만 ACCESS EXCLUSIVE를 잠깐 잡는다.
---   lock_timeout 5초로 두어 오래 줄 서지 않게 한다 (실패하면 다시 실행). 아래 UPDATE는 약 4천 행.
+-- 잠금 영향: ADD COLUMN(기본값 없음)은 카탈로그만 바꿔 즉시 끝나지만 ACCESS EXCLUSIVE를 잡고, 이 락은 같은 트랜잭션의
+--   아래 UPDATE(약 4천 행)가 커밋될 때까지 유지된다 (수 초 이내). 그동안 hospital_detail 읽기도 기다린다.
+--   lock_timeout 5초로 두어 락을 못 잡고 오래 줄 서지 않게 한다 (실패하면 다시 실행).
+-- 권한: 새 컬럼의 UPDATE는 기존 hospital_detail 표 권한으로 충분해 추가 GRANT가 필요 없다.
 -- 적용 전 확인: SELECT column_name FROM information_schema.columns
 --               WHERE table_name = 'hospital_detail' AND column_name = 'price_lastmod';  -- 0행이어야 함
 -- 되돌리기: ALTER TABLE hospital_detail DROP COLUMN price_lastmod;

@@ -13,9 +13,9 @@
 -- 적용 전 확인: SELECT to_regclass('data_stats');  -- NULL이어야 함
 -- 이 파일은 빈 표만 만든다. 행은 배치가 hiraSyncJob을 한 번 끝까지 돌 때 처음 생긴다
 --   (행이 없는 동안 백엔드는 예전처럼 가격 테이블에서 직접 센다).
--- 권한 (표 소유자가 실행. 배치·앱 역할을 쓰는 DB에서만):
---   GRANT SELECT, INSERT, UPDATE, DELETE ON data_stats TO mediprice_batch;
---   GRANT SELECT ON data_stats TO mediprice_app;
+-- 권한: 아래 DO 블록이 mediprice_batch / mediprice_app 롤이 있을 때만 GRANT한다 (롤이 없는 DB에서는 아무것도 안 함).
+--   적용 순서: **012(GRANT 포함)는 백엔드 #23 배포 전에.** 표만 있고 GRANT가 없으면 앱 역할의 data_stats 조회가
+--   permission denied로 실패해 /api/stats가 실패한다. 표 소유자(또는 GRANT 권한자)가 이 파일을 실행해야 GRANT가 적용된다.
 -- 되돌리기 (배치를 이전 버전으로 되돌린 뒤): DROP TABLE data_stats;
 -- =====================================================================
 
@@ -29,3 +29,13 @@ CREATE TABLE IF NOT EXISTS data_stats (
     data_date       date,
     refreshed_at    timestamptz NOT NULL DEFAULT now()
 );
+
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mediprice_batch') THEN
+        GRANT SELECT, INSERT, UPDATE, DELETE ON data_stats TO mediprice_batch;
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mediprice_app') THEN
+        GRANT SELECT ON data_stats TO mediprice_app;
+    END IF;
+END $$;
