@@ -1,11 +1,12 @@
 -- =====================================================================
 -- MediPrice - HIRA 공공데이터 동기화 스키마 (PostgreSQL / Neon)
 --
--- 테이블 10개
+-- 테이블 11개
 --   코드     : region_sido, region_sggu, institution_class
 --   병원     : hospital, hospital_detail
 --   비급여   : npay_item, hospital_npay_price, npay_price_history
 --   배치 작업용 : hospital_seen, hospital_npay_price_seen (이번 실행에서 본 키. 정리 Step이 비움)
+--   미리 계산한 통계 : data_stats (홈 화면 통계 한 행. 배치가 가격 동기화 뒤 채우고 백엔드가 읽음)
 --
 -- 이 파일은 새 DB를 만들 때 쓰는 최종 모양이다. 이미 있는 DB에는 db/changes/의 파일을 번호 순서대로 적용한다.
 --
@@ -113,7 +114,10 @@ CREATE TABLE hospital_detail (
     ykiho      text PRIMARY KEY
                REFERENCES hospital (ykiho) ON DELETE CASCADE,  -- 병원이 삭제되면 같이 삭제
     detail     jsonb,                              -- 세부정보 API 응답 원본 (데이터 없는 병원은 NULL)
-    synced_at  timestamptz NOT NULL DEFAULT now()
+    synced_at  timestamptz NOT NULL DEFAULT now(),
+    -- 사이트맵 lastmod: 이 병원 가격 중 가장 최근 적용 시작일(adt_fr_dd). 오늘(한국 날짜) 이후는 뺀다. 가격 없으면 NULL.
+    -- 배치가 상세 Step 뒤에 채운다. 백엔드 사이트맵이 가격 테이블 집계 대신 이 컬럼을 읽는다.
+    price_lastmod date
 );
 
 
@@ -202,4 +206,26 @@ CREATE TABLE hospital_seen (
 CREATE TABLE hospital_npay_price_seen (
     ykiho  text    NOT NULL,
     sno    integer NOT NULL
+);
+
+
+-- =====================================================================
+-- 5. 미리 계산한 통계 (홈 화면 /api/stats용)
+-- =====================================================================
+
+-- 배치(hiraSyncJob)가 가격 동기화·정리 뒤 한 번 세서 한 행(id = 1)을 upsert한다. 백엔드는 이 행을 읽고, 행이 없으면 직접 센다.
+-- 값의 정의 (백엔드가 예전에 가격 테이블에서 직접 세던 값과 같음)
+--   hospital_count  = count(DISTINCT hospital_npay_price.ykiho)  가격이 있는 병원 수 (hospital 전체 행 수가 아님)
+--   npay_item_count = count(DISTINCT hospital_npay_price.npay_cd) 가격이 있는 비급여 항목 수 (npay_item 전체 행 수가 아님)
+--   price_count     = count(*) FROM hospital_npay_price
+--   data_date       = 가격 동기화가 마지막으로 성공한 날짜(한국 날짜). 가격이 0건이면 NULL
+--                     (synced_at은 "마지막으로 값이 바뀐 시각"이라 max(synced_at)으로는 알 수 없다)
+--   refreshed_at    = 이 행을 마지막으로 쓴 시각
+CREATE TABLE data_stats (
+    id              smallint    PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    hospital_count  integer     NOT NULL,
+    npay_item_count integer     NOT NULL,
+    price_count     integer     NOT NULL,
+    data_date       date,
+    refreshed_at    timestamptz NOT NULL DEFAULT now()
 );
