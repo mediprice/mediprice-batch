@@ -1,5 +1,6 @@
 package com.mediprice.batch;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Map;
@@ -42,9 +43,16 @@ public class HiraBatchRunner implements ApplicationRunner, ExitCodeGenerator {
     private final JobRepository jobRepository;
     private final Map<String, Job> jobs;
 
+    private final Clock clock;
+
     private int exitCode = 0;
 
     public HiraBatchRunner(JobOperator jobOperator, JobRepository jobRepository, Map<String, Job> jobs) {
+        this(jobOperator, jobRepository, jobs, KoreaTime.clock());
+    }
+
+    public HiraBatchRunner(JobOperator jobOperator, JobRepository jobRepository, Map<String, Job> jobs, Clock clock) {
+        this.clock = clock;
         this.jobOperator = jobOperator;
         this.jobRepository = jobRepository;
         this.jobs = jobs;
@@ -67,7 +75,7 @@ public class HiraBatchRunner implements ApplicationRunner, ExitCodeGenerator {
 
         JobParameters params = args.containsOption("restart")
                 ? lastFailedParameters(jobName)
-                : new JobParametersBuilder().addLocalDateTime(REQUESTED_AT, LocalDateTime.now()).toJobParameters();
+                : new JobParametersBuilder().addLocalDateTime(REQUESTED_AT, LocalDateTime.now(clock)).toJobParameters();
 
         // 같은 파라미터의 실패한 실행이 있으면 Spring Batch가 실패한 Step부터 이어서 실행함
         JobExecution execution = jobOperator.start(job, params);

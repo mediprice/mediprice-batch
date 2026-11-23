@@ -2,7 +2,6 @@ package com.mediprice.batch.job;
 
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
-import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 
@@ -21,6 +20,7 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 
 import com.mediprice.batch.HiraBatchRunner;
+import com.mediprice.batch.KoreaTime;
 
 // 이번 실행과 직전 성공 실행에서 모두 갱신되지 않은 행(HIRA에서 사라진 데이터)을 삭제
 // 앞 Step들이 전부 성공해도 읽는 사이 목록이 바뀌면 멀쩡한 행을 놓칠 수 있어서, 한 번 안 보인 행은 다음 실행까지 남겨둠
@@ -51,14 +51,14 @@ public class StaleRowCleanupTasklet implements Tasklet {
     @Override
     public RepeatStatus execute(StepContribution contribution, ChunkContext chunkContext) {
         LocalDateTime requestedAt = HiraBatchRunner.requestedAt(chunkContext);
-        OffsetDateTime cutoff = requestedAt.atZone(ZoneId.systemDefault()).toOffsetDateTime()
+        OffsetDateTime cutoff = requestedAt.atZone(KoreaTime.ZONE).toOffsetDateTime()
                 .minusHours(CLOCK_MARGIN_HOURS);
         MapSqlParameterSource params = new MapSqlParameterSource("cutoff", cutoff);
 
         JobExecution jobExecution = chunkContext.getStepContext().getStepExecution().getJobExecution();
         LocalDateTime lastSuccess = lastSuccessRequestedAt(jobExecution.getJobInstance());
         if (lastSuccess != null) {
-            params.addValue("deleteCutoff", lastSuccess.atZone(ZoneId.systemDefault()).toOffsetDateTime()
+            params.addValue("deleteCutoff", lastSuccess.atZone(KoreaTime.ZONE).toOffsetDateTime()
                     .minusHours(CLOCK_MARGIN_HOURS));
         }
 

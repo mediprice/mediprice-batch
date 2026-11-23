@@ -7,7 +7,6 @@ import static org.mockito.Mockito.when;
 
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
-import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -43,6 +42,7 @@ import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.web.client.RestClient;
 
 import com.mediprice.batch.HiraBatchRunner;
+import com.mediprice.batch.KoreaTime;
 import com.mediprice.batch.hira.HiraClient;
 import com.mediprice.batch.hira.HiraPage;
 import com.mediprice.batch.hira.HiraProperties;
@@ -108,7 +108,7 @@ class CleanupFlowTest {
     }
 
     JobExecution run(LocalDateTime requestedAt) throws Exception {
-        now = requestedAt.atZone(ZoneId.systemDefault()).toOffsetDateTime().plusMinutes(5);
+        now = requestedAt.atZone(KoreaTime.ZONE).toOffsetDateTime().plusMinutes(5);
         priceChunks = 0;
         return jobOperator.start(hiraSyncJob, params(requestedAt));
     }
@@ -154,7 +154,7 @@ class CleanupFlowTest {
     @Test
     void 첫_실행은_직전_성공이_없어_아무것도_안_지우고_전체건수를_Job기록에_올림() throws Exception {
         jdbc.update("INSERT INTO hospital VALUES (:v, :t)", new MapSqlParameterSource("v", "old")
-                .addValue("t", W1.minusWeeks(10).atZone(ZoneId.systemDefault()).toOffsetDateTime()));
+                .addValue("t", W1.minusWeeks(10).atZone(KoreaTime.ZONE).toOffsetDateTime()));
 
         JobExecution e = run(W1);
 
@@ -358,8 +358,8 @@ class CleanupFlowTest {
         assertThat(run(W1).getStatus()).isEqualTo(BatchStatus.COMPLETED);
 
         LocalDateTime w2 = W1.plusWeeks(1);
-        OffsetDateTime old = W1.minusWeeks(1).atZone(ZoneId.systemDefault()).toOffsetDateTime();
-        OffsetDateTime fresh = w2.atZone(ZoneId.systemDefault()).toOffsetDateTime().plusMinutes(5);
+        OffsetDateTime old = W1.minusWeeks(1).atZone(KoreaTime.ZONE).toOffsetDateTime();
+        OffsetDateTime fresh = w2.atZone(KoreaTime.ZONE).toOffsetDateTime().plusMinutes(5);
         // 시도·시군구 Tasklet이 가짜라 직접 넣음. A는 최신 시군구가 참조, B는 최신, C는 오래된 시군구만 참조
         insertSido("A", old);
         insertSido("B", fresh);
@@ -380,7 +380,7 @@ class CleanupFlowTest {
     void 이번_실행에서_갱신된_행이_0건인_테이블은_삭제를_건너뜀(CapturedOutput output) throws Exception {
         assertThat(run(W1).getStatus()).isEqualTo(BatchStatus.COMPLETED);
         jdbc.update("INSERT INTO institution_class VALUES (:v, :t)", new MapSqlParameterSource("v", "old")
-                .addValue("t", W1.minusWeeks(10).atZone(ZoneId.systemDefault()).toOffsetDateTime()));
+                .addValue("t", W1.minusWeeks(10).atZone(KoreaTime.ZONE).toOffsetDateTime()));
 
         assertThat(run(W1.plusWeeks(1)).getStatus()).isEqualTo(BatchStatus.COMPLETED);
 
