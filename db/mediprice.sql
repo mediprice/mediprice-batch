@@ -193,13 +193,16 @@ CREATE TABLE npay_price_history (
 -- "이번 실행에 본 행"을 synced_at 대신 여기에 적는다. 정리 Step이 성공하면 TRUNCATE로 비운다.
 -- - 인덱스·PK 없음: 쓰는 양을 줄이려고. 정리 Step이 한 번 해시 조인으로 읽고, 중복(처음부터 다시 읽은 페이지)은 DISTINCT로 센다.
 -- - 실패한 실행이 남긴 키는 다음 정리 성공 때까지 남는다. 그 키를 "봤다"로 쳐서 삭제가 한 번 늦어질 뿐 잘못 지우지는 않는다.
+--   다만 "읽은 건수 = 전체 건수" 검사는 requested_at이 이번 실행인 키만 센다.
 -- - UNLOGGED로 만들지 않는다: compute가 다시 시작되면(Neon 자동 일시정지 포함) 비워질 수 있어
 --   --restart로 이어서 실행할 때 앞에서 본 키가 사라진다.
 CREATE TABLE hospital_seen (
-    ykiho  text NOT NULL
+    ykiho         text        NOT NULL,
+    requested_at  timestamptz NOT NULL  -- 이 키를 본 실행의 기준 시각 (정리 Step 건수 검사는 이번 실행 것만 셈)
 );
 
 CREATE TABLE hospital_npay_price_seen (
-    ykiho  text    NOT NULL,
-    sno    integer NOT NULL
+    ykiho         text        NOT NULL,
+    sno           integer     NOT NULL,
+    requested_at  timestamptz NOT NULL  -- 이 키를 본 실행의 기준 시각
 );

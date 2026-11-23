@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.sql.Connection;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -13,21 +14,27 @@ import java.util.Map;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.batch.core.BatchStatus;
 import org.springframework.batch.core.job.Job;
 import org.springframework.batch.core.job.JobExecution;
 import org.springframework.batch.core.job.parameters.JobParametersBuilder;
 import org.springframework.batch.core.launch.JobOperator;
+import org.springframework.batch.core.scope.context.ChunkContext;
+import org.springframework.batch.core.step.StepContribution;
 import org.springframework.batch.core.step.tasklet.Tasklet;
 import org.springframework.batch.infrastructure.repeat.RepeatStatus;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -41,6 +48,7 @@ import com.mediprice.batch.job.CleanupFlowTest.FakeHira;
 
 /** 실제 Writer·정리·이력 SQL을 db/mediprice.sql로 만든 PostGIS에서 돌려 "바뀐 행만 쓰기"와 "사라진 행만 지우기"를 확인한다. */
 @Testcontainers(disabledWithoutDocker = true)
+@ExtendWith(OutputCaptureExtension.class)
 @SpringBootTest(classes = PostgresSyncFlowTest.TestApp.class, properties = {
         "spring.batch.jdbc.initialize-schema=always",
         "spring.batch.job.enabled=false"
@@ -208,10 +216,67 @@ class PostgresSyncFlowTest {
         assertThat(count("SELECT count(*) FROM npay_price_history")).as("이번 달 이력도 현재 가격에 맞춤")
                 .isEqualTo(HOSPITALS * 2 - 3);
 
-        // 마지막 VACUUM Step이 트랜잭션 밖에서 실제로 돌았음
-        assertThat(count("SELECT count(*) FROM pg_stat_user_tables WHERE relname IN "
+        // 마지막 VACUUM Step이 트랜잭션 밖에서 실제로 돌았음. 통계 반영이 늦을 수 있어 잠깐 기다림
+        assertThat(vacuumedTables()).isEqualTo(4);
+    }
+
+    int vacuumedTables() throws InterruptedException {
+        String sql = "SELECT count(*) FROM pg_stat_user_tables WHERE relname IN "
                 + "('hospital_npay_price', 'hospital', 'npay_price_history', 'hospital_detail') "
-                + "AND last_vacuum IS NOT NULL AND last_analyze IS NOT NULL")).isEqualTo(4);
+                + "AND last_vacuum IS NOT NULL AND last_analyze IS NOT NULL";
+        int vacuumed = 0;
+        for (int i = 0; i < 50 && vacuumed < 4; i++) {
+            if (i > 0) {
+                Thread.sleep(100);
+            }
+            vacuumed = count(sql);
+        }
+        return vacuumed;
+    }
+
+    @Test
+    void 빈_값이_채워지거나_값이_비워져도_바뀐_행으로_보고_씀() throws Exception {
+        assertThat(run(W1).getStatus()).isEqualTo(BatchStatus.COMPLETED);
+        Map<String, String> hosp1 = versions("hospital", "ykiho");
+        Map<String, String> price1 = versions("hospital_npay_price", "ykiho || '/' || sno");
+
+        // 병원 11: 홈페이지 NULL → 값, 가격 (12, 1): 적용 종료일 값 → 빈 값(NULL)
+        Map<String, String> withUrl = new HashMap<>(hospital(ykiho(11), "02-000-11"));
+        withUrl.put("hospUrl", "https://example.invalid");
+        hira.rows.get(HOSP).set(11, withUrl);
+        Map<String, String> noEnd = new HashMap<>(price(ykiho(12), 1, "MX1", 10012));
+        noEnd.put("adtEndDd", "");
+        hira.rows.get(PRICE).set(24, noEnd);
+
+        assertThat(run(W1.plusWeeks(1)).getStatus()).isEqualTo(BatchStatus.COMPLETED);
+        assertThat(rewritten(hosp1, versions("hospital", "ykiho"))).containsExactly(ykiho(11));
+        assertThat(rewritten(price1, versions("hospital_npay_price", "ykiho || '/' || sno"))).containsExactly(ykiho(12) + "/1");
+        assertThat(jdbc.queryForObject("SELECT hosp_url FROM hospital WHERE ykiho = ?", String.class, ykiho(11)))
+                .isEqualTo("https://example.invalid");
+        assertThat(count("SELECT count(*) FROM hospital_npay_price WHERE ykiho = '" + ykiho(12) + "' AND sno = 1 AND adt_end_dd IS NULL"))
+                .isEqualTo(1);
+    }
+
+    @Test
+    void VACUUM_권한이_없거나_잠금으로_건너뛰면_완료가_아니라_경고를_남김(CapturedOutput output) throws Exception {
+        jdbc.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vacuum_other') THEN "
+                + "CREATE ROLE vacuum_other LOGIN PASSWORD 'pw'; END IF; END $$");
+        DriverManagerDataSource other = new DriverManagerDataSource(POSTGRES.getJdbcUrl(), "vacuum_other", "pw");
+        new VacuumTasklet(other, List.of("hospital")).execute(mock(StepContribution.class), mock(ChunkContext.class));
+        assertThat(output.getOut()).contains("hospital: VACUUM 권한이 없어 건너뜀")
+                .doesNotContain("hospital: VACUUM (ANALYZE) 완료");
+
+        // 다른 세션이 VACUUM과 겹치는 잠금을 잡고 있으면 SKIP_LOCKED가 WARNING만 내고 건너뜀 → 경고 로그
+        try (Connection locker = jdbc.getDataSource().getConnection()) {
+            locker.setAutoCommit(false);
+            locker.createStatement().execute("LOCK TABLE hospital_detail IN SHARE UPDATE EXCLUSIVE MODE");
+            new VacuumTasklet(jdbc.getDataSource(), List.of("hospital_detail"))
+                    .execute(mock(StepContribution.class), mock(ChunkContext.class));
+            locker.rollback();
+        }
+        assertThat(output.getOut()).contains("hospital_detail: VACUUM (ANALYZE) 실패, 배치는 성공으로 둠")
+                .contains("lock not available")
+                .doesNotContain("hospital_detail: VACUUM (ANALYZE) 완료");
     }
 
     // 실제 Writer·항목·이력 Tasklet을 쓰고, HIRA는 가짜. 코드 테이블과 병원 상세는 이 테스트 범위 밖이라 빈 동작

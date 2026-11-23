@@ -17,21 +17,30 @@
 --   SELECT to_regclass('hospital_seen'), to_regclass('hospital_npay_price_seen');           -- 둘 다 NULL이어야 함
 --   SELECT table_name, column_name FROM information_schema.columns
 --    WHERE column_name = 'missed_since' AND table_name IN ('hospital', 'hospital_npay_price'); -- 0행이어야 함
+-- 배치 계정을 따로 둔 경우(감사 R1의 mediprice_batch 등, 소유자 계정이 아님) 적용 직후:
+--   GRANT SELECT, INSERT, TRUNCATE ON hospital_seen, hospital_npay_price_seen TO mediprice_batch;
 -- 되돌리기 (이전 배치로 되돌린 뒤)
 --   DROP TABLE hospital_seen, hospital_npay_price_seen;
 --   ALTER TABLE hospital DROP COLUMN missed_since;
 --   ALTER TABLE hospital_npay_price DROP COLUMN missed_since;
+-- 코드만 예전 배치로 되돌렸다가(이 파일은 그대로 둠) 새 배치를 다시 올릴 때는 다시 올린 첫 실행 전에:
+--   UPDATE hospital SET missed_since = NULL WHERE missed_since IS NOT NULL;
+--   UPDATE hospital_npay_price SET missed_since = NULL WHERE missed_since IS NOT NULL;
+--   TRUNCATE hospital_seen, hospital_npay_price_seen;
+--   (예전 배치는 missed_since를 지우지 않아서, 그 사이 다시 나타난 행에 옛 표시가 남아 한 번만 안 보여도 지워질 수 있음)
 -- =====================================================================
 
 SET lock_timeout = '5s';
 
 CREATE TABLE hospital_seen (
-    ykiho  text NOT NULL
+    ykiho         text        NOT NULL,
+    requested_at  timestamptz NOT NULL  -- 이 키를 본 실행의 기준 시각 (정리 Step 건수 검사는 이번 실행 것만 셈)
 );
 
 CREATE TABLE hospital_npay_price_seen (
-    ykiho  text    NOT NULL,
-    sno    integer NOT NULL
+    ykiho         text        NOT NULL,
+    sno           integer     NOT NULL,
+    requested_at  timestamptz NOT NULL  -- 이 키를 본 실행의 기준 시각
 );
 
 ALTER TABLE hospital            ADD COLUMN missed_since timestamptz;

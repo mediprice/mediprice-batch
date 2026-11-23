@@ -43,7 +43,9 @@ public class PriceHistoryTasklet implements Tasklet {
               AND (h.yadm_npay_cd_nm, h.cur_amt) IS DISTINCT FROM (p.yadm_npay_cd_nm, p.cur_amt)
             """;
 
-    // PK 순서로 넣어 인덱스 오른쪽 끝에 차곡차곡 붙게 함 (무작위 순서면 페이지가 반씩 갈라져 인덱스가 커짐)
+    // 한 달 안에서는 PK (ykiho, npay_cd, snapshot_month, sno) 순서로 넣어 같은 병원·항목 자리에 차례로 붙게 함
+    // 단 새 PK에서는 새 달 행이 기존 달 행 사이(병원·항목별 자리)에 끼어 들어가 페이지 분할로 인덱스가 조금씩 부풀 수 있음
+    // 커지면 가끔 REINDEX INDEX CONCURRENTLY npay_price_history_pkey; 로 회수 (읽기·쓰기를 막지 않음)
     private static final String INSERT_NEW_SQL = """
             INSERT INTO npay_price_history (
                 snapshot_month, ykiho, sno, npay_cd, yadm_npay_cd_nm, cur_amt, synced_at)
