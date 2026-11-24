@@ -29,7 +29,7 @@ MediPrice 서비스(비급여 진료비 비교)의 병원·비급여 항목·가
 - Java 21 (`JAVA_HOME`이 21을 가리켜야 함. Gradle 9는 Java 17 이상 필요)
 - 공공데이터포털 인증키: 병원정보서비스, 비급여진료비정보조회서비스, 의료기관별상세정보서비스, 병원코드정보서비스 4개 활용신청
 - Neon DB에 테이블 생성: [`db/mediprice.sql`](db/mediprice.sql)을 Neon SQL Editor에 붙여넣고 **한 번만** 실행
-  - 테이블 10개(배치 작업용 `*_seen` 2개 포함)와 PostGIS·pg_trgm 확장을 만듭니다. 다시 실행하면 "이미 있음" 오류가 납니다
+  - 테이블 11개(배치 작업용 `*_seen` 2개, 미리 계산한 통계 `data_stats` 포함)와 PostGIS·pg_trgm 확장을 만듭니다. 다시 실행하면 "이미 있음" 오류가 납니다
   - 이미 만든 DB는 [`db/changes/`](db/changes)의 파일을 번호 순서대로 하나씩 적용합니다 (적용 시점·트랜잭션 여부·확인 쿼리는 각 파일 머리 주석. `CONCURRENTLY`/`VACUUM` 파일은 트랜잭션 밖에서 실행)
   - 확인 쿼리:
     ```sql
@@ -37,7 +37,7 @@ MediPrice 서비스(비급여 진료비 비교)의 병원·비급여 항목·가
     WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
     ORDER BY table_name;
     ```
-    테이블 10개가 보이면 성공입니다 (PostGIS가 만드는 `spatial_ref_sys`도 함께 보임)
+    테이블 11개가 보이면 성공입니다 (PostGIS가 만드는 `spatial_ref_sys`도 함께 보임)
     현재는 테이블이 생성된 상태 이므로 DB를 생성할 필요는 없습니다.
 
 ### 2. `.env` 파일 만들기
@@ -72,10 +72,10 @@ HIRA_SERVICE_KEY=<공공데이터포털 일반 인증키 (Decoding)>
 
 | Job | 포함 Step | 용도 |
 |---|---|---|
-| `hiraSyncJob` (기본) | 아래 11개 전체 | 주 1회 전체 동기화 |
+| `hiraSyncJob` (기본) | 아래 13개 전체 | 주 1회 전체 동기화 |
 | `hiraCodeJob` | sido → sggu → institutionClass | 코드 테이블만 갱신 |
 | `priceHistoryJob` | priceHistory | 가격 이력만 다시 만들 때 |
-| `hospitalDetailJob` | hospitalDetail | 병원 상세만 다시 받을 때 |
+| `hospitalDetailJob` | hospitalDetail → priceLastmod | 병원 상세만 다시 받을 때 |
 
 ### hiraSyncJob Step 순서
 
@@ -91,7 +91,9 @@ HIRA_SERVICE_KEY=<공공데이터포털 일반 인증키 (Decoding)>
 | 8 | priceHistoryStep | 현재 가격 → 이번 달 이력 (바뀐 행만) | Tasklet | 5초 |
 | 9 | hospitalDetailStep | 가격 있는 병원마다 상세 호출 → hospital_detail | Chunk 100곳 | 4분 |
 | 10 | detailCleanupStep | 가격이 없어진 병원의 상세 삭제 | Tasklet | 2초 |
-| 11 | vacuumStep | 큰 테이블 `VACUUM (ANALYZE)`. 실패해도 경고만 남기고 성공 | Tasklet (트랜잭션 없음) | - |
+| 11 | priceLastmodStep | 병원 상세의 사이트맵 lastmod(`price_lastmod`) 채우기 (바뀐 행만) | Tasklet | - |
+| 12 | dataStatsStep | 홈 통계 `data_stats` 한 행 upsert. 실패하면 Job 실패 (다시 실행하면 이 Step부터) | Tasklet | - |
+| 13 | vacuumStep | 큰 테이블 `VACUUM (ANALYZE)`. 실패해도 경고만 남기고 성공 | Tasklet (트랜잭션 없음) | - |
 
 - Tasklet: 작은 데이터를 한 번에 받아 한 번에 저장
 - Chunk: Reader가 읽고 Writer가 묶어서 저장·커밋하기를 반복. 실패해도 커밋된 부분은 남음
@@ -122,6 +124,8 @@ src/main/java/com/mediprice/batch/
     ├── HospitalWriter.java / NpayPriceWriter.java
     ├── StaleRowCleanupTasklet.java  갱신 안 된 행 삭제
     ├── PriceHistoryTasklet.java
+    ├── PriceLastmodTasklet.java  병원 상세 price_lastmod 채우기
+    ├── DataStatsTasklet.java   data_stats 한 행 upsert
     ├── VacuumTasklet.java      마지막 VACUUM (ANALYZE)
     ├── PricedHospitalReader.java
     ├── HospitalDetailProcessor.java
@@ -139,6 +143,7 @@ src/main/java/com/mediprice/batch/
 | npay_item | `npay_cd` | 비급여 항목 (중분류 > 소분류 > 상세분류) |
 | hospital_npay_price | (`ykiho`, `sno`) | `ykiho` → hospital, `npay_cd` → npay_item. 병원이 삭제되면 함께 삭제 |
 | npay_price_history | (`ykiho`, `npay_cd`, `snapshot_month`, `sno`) | FK 없음: 병원이 폐업해도 과거 가격 기록은 유지. PK가 병원·항목별 추이 조회 인덱스를 겸함 |
+| data_stats | id = 1 한 행 | 홈 화면 통계(가격 있는 병원 수·항목 수·가격 수·데이터 기준일). 배치가 가격 동기화 뒤 채우고 백엔드가 읽음 |
 | hospital_seen / hospital_npay_price_seen | 없음 | 배치 작업용. 이번 실행에서 HIRA 목록에 보인 키. 정리 Step이 비움 |
 | region_sido / region_sggu | `sido_cd` / `sggu_cd` | region_sggu.sido_cd → region_sido |
 | institution_class | `cl_cd` | |

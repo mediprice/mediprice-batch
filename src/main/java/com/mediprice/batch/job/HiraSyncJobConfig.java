@@ -33,13 +33,14 @@ public class HiraSyncJobConfig {
     private static final String HOSPITAL_TOTAL_KEY = StaleRowCleanupTasklet.totalCountKey("hospital");
     private static final String PRICE_TOTAL_KEY = StaleRowCleanupTasklet.totalCountKey("hospital_npay_price");
 
-    // 전체 동기화: 코드 → 항목 → 병원 → 가격 → 정리 → 가격 이력 → 병원 상세 → 상세 정리 → VACUUM
+    // 전체 동기화: 코드 → 항목 → 병원 → 가격 → 정리 → 가격 이력 → 병원 상세 → 상세 정리 → 사이트맵 lastmod → 통계 → VACUUM
     @Bean
     public Job hiraSyncJob(JobRepository jobRepository,
                            Step sidoStep, Step sgguStep, Step institutionClassStep,
                            Step npayItemStep, Step hospitalStep, Step npayPriceStep,
                            Step syncCleanupStep, Step priceHistoryStep,
-                           Step hospitalDetailStep, Step detailCleanupStep, Step vacuumStep) {
+                           Step hospitalDetailStep, Step detailCleanupStep,
+                           Step priceLastmodStep, Step dataStatsStep, Step vacuumStep) {
         return new JobBuilder("hiraSyncJob", jobRepository)
                 .start(sidoStep)
                 .next(sgguStep)
@@ -51,6 +52,8 @@ public class HiraSyncJobConfig {
                 .next(priceHistoryStep)
                 .next(hospitalDetailStep)
                 .next(detailCleanupStep)
+                .next(priceLastmodStep)
+                .next(dataStatsStep)
                 .next(vacuumStep)
                 .build();
     }
@@ -76,9 +79,10 @@ public class HiraSyncJobConfig {
 
     // 병원 상세만 따로 돌리는 Job
     @Bean
-    public Job hospitalDetailJob(JobRepository jobRepository, Step hospitalDetailStep) {
+    public Job hospitalDetailJob(JobRepository jobRepository, Step hospitalDetailStep, Step priceLastmodStep) {
         return new JobBuilder("hospitalDetailJob", jobRepository)
                 .start(hospitalDetailStep)
+                .next(priceLastmodStep)
                 .build();
     }
 
@@ -204,6 +208,26 @@ public class HiraSyncJobConfig {
                                   NamedParameterJdbcTemplate jdbcTemplate) {
         return new StepBuilder("detailCleanupStep", jobRepository)
                 .tasklet(new StaleRowCleanupTasklet(jdbcTemplate, jobRepository, List.of("hospital_detail"), Map.of(), Map.of()), transactionManager)
+                .build();
+    }
+
+    // 병원 상세의 사이트맵 lastmod(가장 최근 가격 적용 시작일) 채우기. 새로 생긴 상세 행도 채우려고 상세 저장·정리 뒤에 둠
+    @Bean
+    public Step priceLastmodStep(JobRepository jobRepository,
+                                 PlatformTransactionManager transactionManager,
+                                 PriceLastmodTasklet priceLastmodTasklet) {
+        return new StepBuilder("priceLastmodStep", jobRepository)
+                .tasklet(priceLastmodTasklet, transactionManager)
+                .build();
+    }
+
+    // 홈 화면 통계 data_stats 갱신. 실패해도 VACUUM이 건너뛰어질 뿐 데이터는 그대로이며, 다시 실행하면 이 Step부터 이어감
+    @Bean
+    public Step dataStatsStep(JobRepository jobRepository,
+                              PlatformTransactionManager transactionManager,
+                              DataStatsTasklet dataStatsTasklet) {
+        return new StepBuilder("dataStatsStep", jobRepository)
+                .tasklet(dataStatsTasklet, transactionManager)
                 .build();
     }
 

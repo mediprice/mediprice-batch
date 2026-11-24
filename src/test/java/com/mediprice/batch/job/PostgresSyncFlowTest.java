@@ -6,6 +6,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.sql.Connection;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -44,6 +45,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
 import com.mediprice.batch.HiraBatchRunner;
+import com.mediprice.batch.KoreaTime;
 import com.mediprice.batch.job.CleanupFlowTest.FakeHira;
 
 /** 실제 Writer·정리·이력 SQL을 db/mediprice.sql로 만든 PostGIS에서 돌려 "바뀐 행만 쓰기"와 "사라진 행만 지우기"를 확인한다. */
@@ -279,11 +281,76 @@ class PostgresSyncFlowTest {
                 .doesNotContain("hospital_detail: VACUUM (ANALYZE) 완료");
     }
 
+    @Test
+    void 통계와_사이트맵_lastmod를_백엔드_계산식과_같게_채우고_다시_돌려도_바뀐_행만_씀() throws Exception {
+        // 가격 없는 병원 하나(통계의 병원 수에서 빠져야 함)와 가격 없는 항목 MX3(항목 수에서 빠져야 함)
+        hira.rows.get(HOSP).add(hospital(ykiho(HOSPITALS), "02-111-1111"));
+        hira.rows.get(ITEM).add(item("MX3"));
+        // 병원 0: 시작일 여러 개 + 미래 하나, 병원 1: 시작일 모두 비어 있음
+        String today = LocalDate.now(KoreaTime.ZONE).toString().replace("-", "");
+        List<Map<String, String>> prices = hira.rows.get(PRICE);
+        prices.set(0, withAdtFrDd(price(ykiho(0), 1, "MX1", 10000), "20250310"));
+        prices.set(1, withAdtFrDd(price(ykiho(0), 2, "MX2", 20000), "20991231"));
+        prices.set(2, withAdtFrDd(price(ykiho(1), 1, "MX1", 10001), ""));
+        prices.set(3, withAdtFrDd(price(ykiho(1), 2, "MX2", 20001), ""));
+        prices.set(4, withAdtFrDd(price(ykiho(2), 1, "MX1", 10002), today));
+
+        assertThat(run(W1).getStatus()).isEqualTo(BatchStatus.COMPLETED);
+        // 병원 상세 Step은 이 테스트에서 가짜라 상세 행을 직접 넣고 lastmod Step만 다시 돌린다 (hospitalDetailJob과 같은 순서)
+        jdbc.update("INSERT INTO hospital_detail (ykiho) SELECT ykiho FROM hospital WHERE ykiho IN (?, ?, ?, ?)",
+                ykiho(0), ykiho(1), ykiho(2), ykiho(3));
+        assertThat(run(W1.plusWeeks(1)).getStatus()).isEqualTo(BatchStatus.COMPLETED);
+
+        // 백엔드 PriceStatsQuery가 세던 식: count(distinct ykiho), count(distinct npay_cd), count(*)
+        Map<String, Object> stats = jdbc.queryForMap("SELECT hospital_count, npay_item_count, price_count, data_date FROM data_stats");
+        assertThat(stats.get("hospital_count")).isEqualTo(count("SELECT count(DISTINCT ykiho) FROM hospital_npay_price"))
+                .isEqualTo(HOSPITALS);
+        assertThat(count("SELECT count(*) FROM hospital")).as("전체 병원 수와 다름").isEqualTo(HOSPITALS + 1);
+        assertThat(stats.get("npay_item_count")).isEqualTo(count("SELECT count(DISTINCT npay_cd) FROM hospital_npay_price"))
+                .isEqualTo(2);
+        assertThat(count("SELECT count(*) FROM npay_item")).as("전체 항목 수와 다름").isEqualTo(3);
+        assertThat(stats.get("price_count")).isEqualTo(HOSPITALS * 2);
+        assertThat(stats.get("data_date").toString()).isEqualTo(LocalDate.now(KoreaTime.ZONE).toString());
+        assertThat(count("SELECT count(*) FROM data_stats")).isEqualTo(1);
+
+        // 백엔드 사이트맵 식: max(adt_fr_dd) FILTER (adt_fr_dd <= 오늘)
+        assertThat(lastmod(ykiho(0))).as("미래 시작일은 뺌").isEqualTo("2025-03-10");
+        assertThat(lastmod(ykiho(1))).as("시작일이 모두 비면 null").isNull();
+        assertThat(lastmod(ykiho(2))).as("오늘 시작은 포함").isEqualTo(LocalDate.now(KoreaTime.ZONE).toString());
+        assertThat(lastmod(ykiho(3))).isEqualTo("2024-01-01");
+
+        // 값이 같으면 상세 행도 통계 행도 값이 같고, 상세 행은 다시 쓰지 않음
+        Map<String, String> detail = versions("hospital_detail", "ykiho");
+        assertThat(run(W1.plusWeeks(2)).getStatus()).isEqualTo(BatchStatus.COMPLETED);
+        assertThat(rewritten(detail, versions("hospital_detail", "ykiho"))).isEmpty();
+
+        // 가격이 하나도 없는 병원이 되면 null, 가격이 0건이면 data_date도 null
+        jdbc.update("DELETE FROM hospital_npay_price WHERE ykiho = ?", ykiho(3));
+        new PriceLastmodTasklet(new org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate(jdbc), KoreaTime.clock())
+                .execute(null, null);
+        assertThat(lastmod(ykiho(3))).as("가격이 없어지면 null").isNull();
+        jdbc.update("DELETE FROM hospital_npay_price");
+        new DataStatsTasklet(new org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate(jdbc), KoreaTime.clock())
+                .execute(null, null);
+        assertThat(jdbc.queryForMap("SELECT hospital_count, npay_item_count, price_count, data_date FROM data_stats").values())
+                .containsExactly(0, 0, 0, null);
+    }
+
+    static Map<String, String> withAdtFrDd(Map<String, String> price, String adtFrDd) {
+        Map<String, String> m = new HashMap<>(price);
+        m.put("adtFrDd", adtFrDd);
+        return m;
+    }
+
+    String lastmod(String ykiho) {
+        return jdbc.queryForObject("SELECT price_lastmod::text FROM hospital_detail WHERE ykiho = ?", String.class, ykiho);
+    }
+
     // 실제 Writer·항목·이력 Tasklet을 쓰고, HIRA는 가짜. 코드 테이블과 병원 상세는 이 테스트 범위 밖이라 빈 동작
     @SpringBootConfiguration
     @EnableAutoConfiguration
     @Import({HiraSyncJobConfig.class, HospitalWriter.class, NpayPriceWriter.class, NpayItemTasklet.class,
-            PriceHistoryTasklet.class})
+            PriceHistoryTasklet.class, PriceLastmodTasklet.class, DataStatsTasklet.class})
     static class TestApp {
 
         static <T extends Tasklet> T finished(Class<T> type) throws Exception {

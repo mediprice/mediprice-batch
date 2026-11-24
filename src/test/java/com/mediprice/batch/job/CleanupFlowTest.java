@@ -555,6 +555,14 @@ class CleanupFlowTest {
             return finished(PriceHistoryTasklet.class);
         }
 
+        @Bean PriceLastmodTasklet priceLastmodTasklet() throws Exception {
+            return finished(PriceLastmodTasklet.class);
+        }
+
+        @Bean DataStatsTasklet dataStatsTasklet() throws Exception {
+            return finished(DataStatsTasklet.class);
+        }
+
         @Bean PricedHospitalReader pricedHospitalReader() {
             return mock(PricedHospitalReader.class);
         }
