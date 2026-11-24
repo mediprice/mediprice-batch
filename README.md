@@ -102,6 +102,8 @@ db/
 └── mediprice.sql                  테이블 8개 생성 SQL (컬럼별 설명 주석 포함)
 src/main/java/com/mediprice/batch/
 ├── BatchApplication.java       시작점. 배치 결과를 종료 코드로 반환
+├── KoreaTime.java              Asia/Seoul 고정 (JVM 기본 시간대, Clock)
+├── KoreaTimeConfig.java        Clock 빈 (Asia/Seoul)
 ├── HiraBatchRunner.java        실행기. requestedAt 파라미터, --restart, --job= 처리
 ├── hira/                       HIRA API 공통
 │   ├── HiraProperties.java     hira.base-url, hira.service-key 설정값
@@ -167,4 +169,4 @@ src/main/java/com/mediprice/batch/
 - **HIRA 응답 지연:** HIRA가 느려지면 오류 코드 05(서비스 연결실패)가 나고, 같은 페이지에서 3번 연속 나면 Step이 실패합니다. 병원 Step이 평소(6~7분)보다 크게 느리면 이 상태이므로 시간을 두고 `--restart`로 이어서 실행합니다. 호출마다 붙는 기본 대기 시간이 늘어난 것이라 페이지 크기(`numOfRows`)를 줄여도 빨라지지 않습니다.
 - **병원 상세 누락:** 가격이 있는 병원 중 약 38%는 HIRA 세부정보 API가 0건을 반환해 `hospital_detail.detail`이 비어 있습니다 (HIRA 원본에 없는 데이터).
 - **기준 월:** 가격 이력의 `snapshot_month`는 `requestedAt`이 속한 달의 1일입니다. 같은 달에 다시 실행하면 그 달 기록을 지우고 새로 채웁니다.
-- **시간대:** 실행 기록과 `requestedAt`에는 시간대가 없습니다. 실행 환경의 시간대가 다르면 실행 중 판단과 정리 기준이 어긋나므로, 자동 실행을 붙일 때는 `TZ=Asia/Seoul`을 지정합니다.
+- **시간대:** 배치는 호스트의 `TZ`와 관계없이 Asia/Seoul 기준으로 동작합니다. 시작할 때 JVM 기본 시간대를 Asia/Seoul로 고정하므로(`KoreaTime`) 시간대가 없는 실행 기록(`batch_*`)과 `requestedAt`은 한국 시각이고, 정리 기준 시각도 Asia/Seoul로 해석해 `synced_at`(timestamptz)과 비교합니다. 자동 실행에 `TZ=Asia/Seoul`을 지정할 필요가 없습니다. 이전에 UTC 호스트에서 쌓인 `batch_*` 기록은 한국 시각으로 읽혀 9시간 이르게 보이므로, 전환 직후 한 번은 정리가 평소보다 덜 삭제됩니다(과삭제는 없음). 이전 호스트가 이미 KST였다면 영향이 없습니다. 실행 중이 아닐 때 배포하세요.

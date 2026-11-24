@@ -6,7 +6,10 @@ import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.util.TimeZone;
 import java.util.List;
 import java.util.Map;
 
@@ -63,7 +66,7 @@ class HiraBatchRunnerTest {
     @BeforeEach
     void setUp() {
         runs = 0;
-        runner = new HiraBatchRunner(jobOperator, jobRepository, Map.of("testJob", testJob));
+        runner = new HiraBatchRunner(jobOperator, jobRepository, Map.of("testJob", testJob), KoreaTime.clock());
     }
 
     JobExecution leftStarted() {
@@ -147,6 +150,34 @@ class HiraBatchRunnerTest {
         assertThat(runs).isEqualTo(1);
         assertThat(runner.getExitCode()).isZero();
         assertThat(status(crashed)).isEqualTo("FAILED");
+    }
+
+    @Test
+    void JVM_기본_시간대가_UTC여도_requestedAt은_Asia_Seoul_시각임() throws Exception {
+        assertThat(TimeZone.getDefault().getID()).isEqualTo("UTC");
+        Instant instant = Instant.parse("2026-01-05T15:30:00Z");
+        runner = new HiraBatchRunner(jobOperator, jobRepository, Map.of("testJob", testJob),
+                Clock.fixed(instant, KoreaTime.ZONE));
+
+        run("--job=testJob");
+
+        JobParameters saved = jobRepository.getLastJobExecution(jobRepository.getLastJobInstance("testJob"))
+                .getJobParameters();
+        assertThat(saved.getLocalDateTime(HiraBatchRunner.REQUESTED_AT))
+                .isEqualTo(LocalDateTime.of(2026, 1, 6, 0, 30));
+    }
+
+    @Test
+    void 기본_생성자의_requestedAt도_Asia_Seoul_벽시계_시각임() throws Exception {
+        assertThat(TimeZone.getDefault().getID()).isEqualTo("UTC");
+        LocalDateTime before = LocalDateTime.now(KoreaTime.ZONE);
+
+        run("--job=testJob");
+
+        JobParameters saved = jobRepository.getLastJobExecution(jobRepository.getLastJobInstance("testJob"))
+                .getJobParameters();
+        assertThat(saved.getLocalDateTime(HiraBatchRunner.REQUESTED_AT))
+                .isBetween(before, LocalDateTime.now(KoreaTime.ZONE));
     }
 
     @Test
