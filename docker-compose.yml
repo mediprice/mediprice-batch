@@ -1,0 +1,6 @@
+services:
+  batch:
+    build: .
+    image: mediprice-batch
+    env_file: .env
+    restart: "no"
