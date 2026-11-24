@@ -80,9 +80,11 @@ class CleanupFlowTest {
         d.execute("CREATE TABLE region_sggu (sggu_cd varchar primary key, sido_cd varchar references region_sido (sido_cd), synced_at timestamp with time zone not null)");
         d.execute("CREATE TABLE institution_class (cl_cd varchar primary key, synced_at timestamp with time zone not null)");
         d.execute("CREATE TABLE npay_item (npay_cd varchar primary key, synced_at timestamp with time zone not null)");
-        d.execute("CREATE TABLE hospital (ykiho varchar primary key, synced_at timestamp with time zone not null)");
+        d.execute("CREATE TABLE hospital (ykiho varchar primary key, synced_at timestamp with time zone not null, missed_since timestamp with time zone)");
+        d.execute("CREATE TABLE hospital_seen (ykiho varchar not null, requested_at timestamp with time zone not null)");
         d.execute("CREATE TABLE hospital_detail (ykiho varchar primary key references hospital (ykiho) on delete cascade, synced_at timestamp with time zone not null)");
-        d.execute("CREATE TABLE hospital_npay_price (ykiho varchar not null references hospital (ykiho) on delete cascade, sno int not null, npay_cd varchar not null references npay_item (npay_cd), synced_at timestamp with time zone not null, primary key (ykiho, sno))");
+        d.execute("CREATE TABLE hospital_npay_price (ykiho varchar not null references hospital (ykiho) on delete cascade, sno int not null, npay_cd varchar not null references npay_item (npay_cd), synced_at timestamp with time zone not null, missed_since timestamp with time zone, primary key (ykiho, sno))");
+        d.execute("CREATE TABLE hospital_npay_price_seen (ykiho varchar not null, sno int not null, requested_at timestamp with time zone not null)");
 
         failPriceAtChunk = -1;
         items = new HashSet<>(Set.of("i1"));
@@ -153,7 +155,7 @@ class CleanupFlowTest {
 
     @Test
     void 첫_실행은_직전_성공이_없어_아무것도_안_지우고_전체건수를_Job기록에_올림() throws Exception {
-        jdbc.update("INSERT INTO hospital VALUES (:v, :t)", new MapSqlParameterSource("v", "old")
+        jdbc.update("INSERT INTO hospital (ykiho, synced_at) VALUES (:v, :t)", new MapSqlParameterSource("v", "old")
                 .addValue("t", W1.minusWeeks(10).atZone(KoreaTime.ZONE).toOffsetDateTime()));
 
         JobExecution e = run(W1);
@@ -285,6 +287,42 @@ class CleanupFlowTest {
     }
 
     @Test
+    void 실패한_실행이_남긴_키로_건수검사가_부풀지_않음() throws Exception {
+        assertThat(run(W1).getStatus()).isEqualTo(BatchStatus.COMPLETED);
+
+        // W2: 병원 Step은 전부 읽고(본 키가 남음) 가격 Step에서 실패 → 정리가 안 돌아 본 키가 비워지지 않음
+        failPriceAtChunk = 1;
+        assertThat(run(W1.plusWeeks(1)).getStatus()).isEqualTo(BatchStatus.FAILED);
+
+        // W3: 병원 Step이 순서 변경으로 h1000을 놓침. W2의 키까지 세면 2500건이라 놓친 것을 모름
+        failPriceAtChunk = -1;
+        hira.before.put(HOSP + "#2", () -> Collections.swap(hira.rows.get(HOSP), 999, 1000));
+        JobExecution w3 = run(W1.plusWeeks(2));
+        assertThat(w3.getStatus()).isEqualTo(BatchStatus.FAILED);
+        assertThat(failures(w3)).contains("hospital 갱신된 행이 전체 건수보다 적음: 2499 / 2500");
+    }
+
+    @Test
+    void 배포_후_첫_실행은_예전_성공기록이_있어도_처음_안_보인_행을_지우지_않음(CapturedOutput output) throws Exception {
+        assertThat(run(W1).getStatus()).isEqualTo(BatchStatus.COMPLETED);
+        // 예전 배치가 남긴 행: 이미 W1 전에 HIRA에서 사라졌지만 missed_since가 없음 (예전 기준이면 다음 실행에 삭제 대상)
+        OffsetDateTime old = W1.minusWeeks(2).atZone(KoreaTime.ZONE).toOffsetDateTime();
+        jdbc.update("INSERT INTO hospital (ykiho, synced_at) VALUES ('gone', :t)", new MapSqlParameterSource("t", old));
+        jdbc.update("INSERT INTO hospital_npay_price (ykiho, sno, npay_cd, synced_at) VALUES ('h0', 9, 'i1', :t)",
+                new MapSqlParameterSource("t", old));
+
+        JobExecution w2 = run(W1.plusWeeks(1));
+        assertThat(w2.getStatus()).as(failures(w2)).isEqualTo(BatchStatus.COMPLETED);
+        assertThat(priceExists("h0", 9)).isTrue();
+        assertThat(hospitalExists("gone")).isTrue();
+        assertThat(output.getOut()).contains("hospital_npay_price: 오래된 행 0건 삭제", "hospital: 오래된 행 0건 삭제");
+
+        assertThat(run(W1.plusWeeks(2)).getStatus()).isEqualTo(BatchStatus.COMPLETED);
+        assertThat(priceExists("h0", 9)).isFalse();
+        assertThat(hospitalExists("gone")).isFalse();
+    }
+
+    @Test
     void 삭제_기준은_마지막_시도가_아니라_마지막_성공_실행() throws Exception {
         assertThat(run(W1).getStatus()).isEqualTo(BatchStatus.COMPLETED);
 
@@ -388,6 +426,15 @@ class CleanupFlowTest {
         assertThat(output.getOut()).contains("institution_class: 이번 실행에서 갱신된 행이 없어 삭제를 건너뜀");
     }
 
+    @Test
+    void VACUUM이_실패해도_경고만_남기고_배치는_성공(CapturedOutput output) throws Exception {
+        // H2에는 VACUUM이 없어 항상 실패함
+        JobExecution e = run(W1);
+
+        assertThat(e.getStatus()).as(failures(e)).isEqualTo(BatchStatus.COMPLETED);
+        assertThat(output.getOut()).contains("hospital_npay_price: VACUUM (ANALYZE) 실패, 배치는 성공으로 둠");
+    }
+
     static class FakeHira extends HiraClient {
         final Map<String, List<Map<String, String>>> rows = new HashMap<>();
         final Map<String, Runnable> before = new HashMap<>();
@@ -417,7 +464,7 @@ class CleanupFlowTest {
         final NamedParameterJdbcTemplate jdbc;
 
         TestHospitalWriter(NamedParameterJdbcTemplate jdbc) {
-            super(jdbc, null);
+            super(jdbc);
             this.jdbc = jdbc;
         }
 
@@ -426,6 +473,8 @@ class CleanupFlowTest {
             for (Map<String, String> item : chunk.getItems()) {
                 jdbc.update("MERGE INTO hospital (ykiho, synced_at) KEY (ykiho) VALUES (:y, :t)",
                         new MapSqlParameterSource("y", item.get("ykiho")).addValue("t", now));
+                jdbc.update("INSERT INTO hospital_seen VALUES (:y, :r)", new MapSqlParameterSource("y", item.get("ykiho"))
+                        .addValue("r", currentRunAt()));
             }
         }
     }
@@ -434,7 +483,7 @@ class CleanupFlowTest {
         final NamedParameterJdbcTemplate jdbc;
 
         TestPriceWriter(NamedParameterJdbcTemplate jdbc) {
-            super(jdbc, null);
+            super(jdbc);
             this.jdbc = jdbc;
         }
 
@@ -449,6 +498,8 @@ class CleanupFlowTest {
                                 .addValue("s", Integer.parseInt(item.get("sno")))
                                 .addValue("c", item.get("npayCd"))
                                 .addValue("t", now));
+                jdbc.update("INSERT INTO hospital_npay_price_seen VALUES (:y, :s, :r)", new MapSqlParameterSource("y", item.get("ykiho"))
+                        .addValue("s", Integer.parseInt(item.get("sno"))).addValue("r", currentRunAt()));
             }
         }
     }
